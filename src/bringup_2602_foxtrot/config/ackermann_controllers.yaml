@@ -1,0 +1,28 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 30
+    use_sim_time: true
+
+    ackermann_controller:
+      type: ackermann_steering_controller/AckermannSteeringController
+
+    joint_broadcaster_controller:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+ackermann_controller:
+  ros__parameters:
+    reference_timeout: 2.0
+    use_stamped_vel: false
+    front_steering: true
+    open_loop: false
+    
+    # Kinematics
+    wheelbase: 0.4
+    front_wheel_track: 0.44
+    rear_wheel_track: 0.44
+    front_wheels_radius: 0.05
+    rear_wheels_radius: 0.05
+
+    # These MUST match the joint names in your robot_core.xacro exactly
+    rear_wheels_names: ['rear_left_wheel_joint', 'rear_right_wheel_joint']
+    front_steer_names: ['front_left_steer_joint', 'front_right_steer_joint']

@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <gazebo>
+        <!-- Modern Gazebo Differential Drive Plugin -->
+        <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+            <left_joint>left_wheel_joint</left_joint>
+            <right_joint>right_wheel_joint</right_joint>
+            <wheel_separation>0.44</wheel_separation>
+            <wheel_radius>0.05</wheel_radius>
+            
+            <!-- Output Configuration -->
+            <odom_publish_frequency>50</odom_publish_frequency>
+            <topic>/cmd_vel</topic>
+            <odom_topic>/odom</odom_topic>
+            <frame_id>odom</frame_id>
+            <child_frame_id>base_link</child_frame_id>
+        </plugin>
+
+        <!-- Modern Gazebo Joint State Publisher (Required for tf trees) -->
+        <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+            <topic>/joint_states</topic>
+        </plugin>
+    </gazebo>
+
+</robot>
