@@ -45,8 +45,7 @@ def generate_launch_description():
                 "gz_sim.launch.py",
             )
         ),
-        launch_arguments={"gz_args": ['-r -v4 ', world], 'on_exit_shutdown': 'true'}.items(),
-    )
+        launch_arguments={"gz_args": ['-r -v4 --render-engine ogre ', world], 'on_exit_shutdown': 'true'}.items(),    )
 
     # --- Spawn entity into Gazebo from robot_description topic ---
     spawn = Node(
