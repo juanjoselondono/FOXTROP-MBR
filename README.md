@@ -10,12 +10,12 @@ This is a GitHub template. You can make your own copy by clicking the green "Use
 - Python3 & C++
 ## Command setup
 
-## Requirements package
 - colcon build --symlink-install
 - source install/setup.bash
 - ros2 launch bringup_2602_foxtrot gz_spawn.launch.py robot_type:=diffdrive
 - ros2 launch bringup_2602_foxtrot gz_spawn.launch.py robot_type:=ackermann
 
+## Requirements package
 
 - `rclpy`
 - `geometry_msgs`, `nav_msgs`, `sensor_msgs`, `tf2_ros`

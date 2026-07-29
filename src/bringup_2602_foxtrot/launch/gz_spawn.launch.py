@@ -95,14 +95,27 @@ def generate_launch_description():
     )
 
     # --- Dynamic Multiplexer Nodes ---
-    twist_mux_params = os.path.join(get_package_share_directory(bringup_pkg_name), 'config', 'twist_mux.yaml')
+    joy_params = os.path.join(get_package_share_directory(bringup_pkg_name),'config','joystick.yaml')
+
+    # Run the spawner node from the gazebo_ros package. The entity name doesn't really matter if you only have a single robot.
+    joy_node = Node(package='joy', 
+                    executable='joy_node',
+                    parameters=[joy_params],
+    )
+
+    teleop_node = Node(package='teleop_twist_joy', 
+                    executable='teleop_node',
+                    name="teleop_node",
+                    parameters=[joy_params],
+                    remappings=[('/cmd_vel','/cmd_vel_joy')]
+    )
+
+    twist_mux_params = os.path.join(get_package_share_directory(bringup_pkg_name),'config','twist_mux.yaml')
     
-    twist_mux_node_diff = Node(
-        package='twist_mux', 
-        executable='twist_mux',
-        parameters=[twist_mux_params, {'use_sim_time': True}],
-        remappings=[('/cmd_vel_out', '/diffdrive_controller/cmd_vel')],
-        condition=IfCondition(PythonExpression(["'", robot_type, "' == 'diffdrive'"]))
+    twist_mux_node = Node(package='twist_mux', 
+                    executable='twist_mux',
+                    parameters=[twist_mux_params,{'use_sim_time': True}],
+                    remappings=[('/cmd_vel_out','/diffdrive_controller/cmd_vel')]
     )
 
     twist_mux_node_ack = Node(
@@ -133,9 +146,11 @@ def generate_launch_description():
         rsp,
         spawn,
         bridge,
-        # joint_broad_spawner,
-        # diff_drive_spawner,
+        joint_broad_spawner,
+        diff_drive_spawner,
         # ackermann_spawner,
-        # twist_mux_node_diff,
+        joy_node,
+        teleop_node,
+        twist_mux_node,
         # twist_mux_node_ack
     ])

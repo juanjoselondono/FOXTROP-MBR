@@ -8,7 +8,7 @@ controller_manager:
 
     joint_broadcaster_controller:
       type: joint_state_broadcaster/JointStateBroadcaster
-
+# this controller list developed by ROS2 we can check them in https://github.com/ros-controls/ros2_controllers
 diffdrive_controller:
   ros__parameters:
 

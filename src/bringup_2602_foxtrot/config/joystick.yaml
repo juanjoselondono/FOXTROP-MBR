@@ -1,0 +1,23 @@
+joy_node:
+  ros__parameters:
+    device_id: 0
+    deadzone: 0.05
+    autorepeat_rate: 20.0
+
+teleop_node:
+  ros__parameters:
+  # Parameters for configuring the controller 
+    axis_linear:
+      x: 1
+    scale_linear:
+      x: 3.0
+
+    axis_angular:
+      yaw: 3 # forward right # 2 on logitech and 3 on sony controller
+    scale_angular:
+      yaw: 3.0
+
+    enable_button: 4
+    require_enable_button: true
+    publish_stamped_twist: true
+    frame: 'teleop_twist_joy'

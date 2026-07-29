@@ -24,7 +24,6 @@ def generate_launch_description():
         parameters=[{"robot_description": robot_description,
                      "use_sim_time": use_sim_time}],
     )
-
     # --- Joint State Publisher GUI (Manual Telemetry) ---
     jsp_gui = Node(
         package="joint_state_publisher_gui",
