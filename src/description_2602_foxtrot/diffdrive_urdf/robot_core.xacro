@@ -115,14 +115,15 @@
             <geometry>
                 <sphere radius="0.049"/>
             </geometry>
-            <surface>
+            <!-- Removed the surface setup for the caster front wheel -->
+            <!-- <surface>
                 <friction>
                 <ode>
                     <mu>0.01</mu>
                     <mu2>0.01</mu2>
                 </ode>
                 </friction>
-            </surface>
+            </surface> -->
         </collision>
         <xacro:inertial_sphere mass="0.1" radius="0.049">
             <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -161,7 +162,57 @@
             <origin xyz="0 0 0" rpy="0 0 0"/>
         </xacro:inertial_sphere>
     </link>
+<!-- ============================================== -->
+    <!-- GAZEBO PHYSICS AND FRICTION PROPERTIES         -->
+    <!-- ============================================== 
+    mu1	Friction coefficient in the first tangent direction	0.5–2.0
+    mu2	Friction coefficient in the second tangent direction	0.5–2.0
+    kp	Contact stiffness ("spring" constant)	1e5–1e7
+    kd	Contact damping	1–1000
+    maxDepth	Maximum penetration depth before applying corrective forces	0.001–0.01 m
+    inertia	Mass distribution of the wheel (not a contact parameter)	Depends on wheel geometry -->
+        <!-- Left Drive Wheel -->
+    <gazebo reference="left_wheel">
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+        <maxVel>0.1</maxVel>
+        <material>Gazebo/Blue</material>
+    </gazebo>
 
+    <!-- Right Drive Wheel -->
+    <gazebo reference="right_wheel">
+        <mu1>1.0</mu1>
+        <mu2>1.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+        <maxVel>0.1</maxVel>
+        <material>Gazebo/Blue</material>
+    </gazebo>
 
+    <!-- Front Caster Wheel -->
+    <gazebo reference="caster_front_wheel">
+        <mu1>0.001</mu1>
+        <mu2>0.001</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+        <maxVel>1.0</maxVel>
+        <material>Gazebo/Black</material>
+    </gazebo>
+
+    <!-- Rear Caster Wheel -->
+    <gazebo reference="caster_rear_wheel">
+        <mu1>0.001</mu1>
+        <mu2>0.001</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <minDepth>0.001</minDepth>
+        <maxVel>1.0</maxVel>
+        <material>Gazebo/Black</material>
+    </gazebo>
 
 </robot>

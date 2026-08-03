@@ -2,10 +2,11 @@ import os
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, Command, PythonExpression, PathJoinSubstitution
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -45,8 +46,8 @@ def generate_launch_description():
                 "gz_sim.launch.py",
             )
         ),
-        launch_arguments={"gz_args": ['-r -v4 --render-engine ogre ', world], 'on_exit_shutdown': 'true'}.items(),    )
-
+        launch_arguments={"gz_args": ['-r -v4 ', world], 'on_exit_shutdown': 'true'}.items(),
+    )   
     # --- Spawn entity into Gazebo from robot_description topic ---
     spawn = Node(
         package="ros_gz_sim",
@@ -94,10 +95,32 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", robot_type, "' == 'ackermann'"]))
     )
 
+    # --- Event Handlers for Sequential Execution ---
+    # These prevent the spawners from executing until the 'spawn' node exits successfully
+    delay_joint_broad_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=spawn,
+            on_exit=[joint_broad_spawner],
+        )
+    )
+
+    delay_diff_drive_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=spawn,
+            on_exit=[diff_drive_spawner],
+        )
+    )
+
+    delay_ackermann_spawner = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=spawn,
+            on_exit=[ackermann_spawner],
+        )
+    )
+
     # --- Dynamic Multiplexer Nodes ---
     joy_params = os.path.join(get_package_share_directory(bringup_pkg_name),'config','joystick.yaml')
 
-    # Run the spawner node from the gazebo_ros package. The entity name doesn't really matter if you only have a single robot.
     joy_node = Node(package='joy', 
                     executable='joy_node',
                     parameters=[joy_params],
@@ -146,11 +169,14 @@ def generate_launch_description():
         rsp,
         spawn,
         bridge,
-        joint_broad_spawner,
-        diff_drive_spawner,
-        # ackermann_spawner,
         joy_node,
         teleop_node,
         twist_mux_node,
+        # twist_mux_node_ack,
+        # We replace the direct node calls with the delayed event handlers
+        delay_joint_broad_spawner,
+        delay_diff_drive_spawner,   
+        # Retaining your original commented-out logic for modularity
+        # delay_ackermann_spawner,
         # twist_mux_node_ack
     ])
