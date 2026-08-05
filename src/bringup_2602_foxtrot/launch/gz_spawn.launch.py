@@ -177,6 +177,15 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
     )
+    # lane keeping node
+    lane_keeper_node = Node(
+        package='control_2602_foxtrot',
+        executable='lane_keeper.py',
+        name='lane_keeper_node',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
             "robot_type",
@@ -204,7 +213,8 @@ def generate_launch_description():
         delay_joint_broad_spawner,
         delay_diff_drive_spawner,
         supervisor_node,     
-        wall_follower_node,   
+        wall_follower_node,
+        lane_keeper_node   
         # delay_ackermann_spawner,
         # twist_mux_node_ack
         # twist_mux_node_ack,

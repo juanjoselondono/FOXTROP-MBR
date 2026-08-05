@@ -17,7 +17,8 @@ setup(
         ('lib/' + package_name, [
             'AEB/aeb_ttc.py',
             'AEB/wall_follower.py',
-            'AEB/supervisor.py'
+            'AEB/supervisor.py', 
+            'AEB/lane_keeper.py'
         ]),
     install_requires=['setuptools'],
     zip_safe=True,

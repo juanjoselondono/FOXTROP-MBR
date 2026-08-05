@@ -47,7 +47,8 @@
             <gz_frame_id>camera_link_optical</gz_frame_id>
 
             <camera>
-                <horizontal_fov>1.089</horizontal_fov> <!-- Approx 62 degrees -->
+                <!-- Widened to 1.57 radians (90 degrees) for peripheral vision -->
+                <horizontal_fov>1.57</horizontal_fov> 
                 <image>
                     <width>640</width>
                     <height>480</height>
@@ -55,7 +56,7 @@
                 </image>
                 <clip>
                     <near>0.05</near>
-                    <far>8.0</far>
+                    <far>15.0</far> <!-- Extended view distance -->
                 </clip>
                 <noise>
                     <type>gaussian</type>

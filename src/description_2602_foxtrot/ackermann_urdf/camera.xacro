@@ -25,7 +25,7 @@
         <parent link="chassis"/>
         <child link="camera_link"/>
         <!-- Placed at the front of the chassis. Adjust X and Z as necessary -->
-        <origin xyz="0.1 0 0.1" rpy="0 0 0"/>
+        <origin xyz="0.0 0 0.0" rpy="0 0 0"/>
     </joint>
 
     <!-- Virtual Optical Link for ROS 2 Image Data Convention -->

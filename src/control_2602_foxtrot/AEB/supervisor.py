@@ -13,15 +13,16 @@ class ModeSupervisor(Node):
         
         self.aeb_pub = self.create_publisher(Bool, '/aeb/state', 10)
         self.wf_pub = self.create_publisher(Bool, '/wf/state', 10)
+        self.lk_pub = self.create_publisher(Bool, '/lk/state', 10)
 
         self.aeb_active = True
         self.wf_active = False
+        self.lk_active = False
         self.last_buttons = None
 
-        # A 1Hz heartbeat timer to ensure nodes sync without flooding the network
         self.sync_timer = self.create_timer(1.0, self.publish_states)
 
-        self.get_logger().info("Event-Driven Supervisor Online. A = Auto, X = Manual, B = Toggle AEB")
+        self.get_logger().info("Supervisor Online. A = Wall Follow, Y = Lane Keep, X = Manual, B = AEB")
 
     def joy_callback(self, msg):
         if self.last_buttons is None:
@@ -33,13 +34,22 @@ class ModeSupervisor(Node):
         # BUTTON X (Index 0): Enable Manual Navigation
         if msg.buttons[0] == 1 and self.last_buttons[0] == 0:
             self.wf_active = False
+            self.lk_active = False
             self.get_logger().info("MODE ENGAGED: Manual Joystick Navigation.")
             state_changed = True
 
         # BUTTON A (Index 1): Enable Autonomous Wall Following
         if msg.buttons[1] == 1 and self.last_buttons[1] == 0:
             self.wf_active = True
+            self.lk_active = False
             self.get_logger().info("MODE ENGAGED: Autonomous Wall Following.")
+            state_changed = True
+            
+        # BUTTON Y (Index 3): Enable Visual Lane Keeping
+        if len(msg.buttons) > 3 and msg.buttons[3] == 1 and self.last_buttons[3] == 0:
+            self.lk_active = True
+            self.wf_active = False
+            self.get_logger().info("MODE ENGAGED: Visual Lane Keeping.")
             state_changed = True
 
         # BUTTON B (Index 2): Toggle AEB System On/Off
@@ -49,7 +59,6 @@ class ModeSupervisor(Node):
             self.get_logger().warn(f"AEB System {status}.")
             state_changed = True
 
-        # ONLY publish immediately if a physical button was triggered
         if state_changed:
             self.publish_states()
 
@@ -63,6 +72,10 @@ class ModeSupervisor(Node):
         wf_msg = Bool()
         wf_msg.data = self.wf_active
         self.wf_pub.publish(wf_msg)
+        
+        lk_msg = Bool()
+        lk_msg.data = self.lk_active
+        self.lk_pub.publish(lk_msg)
 
 def main(args=None):
     rclpy.init(args=args)

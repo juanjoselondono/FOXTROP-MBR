@@ -28,6 +28,7 @@ install(PROGRAMS
   AEB/aeb_ttc.py
   AEB/wall_follower.py
   AEB/supervisor.py
+  AEB/lane_keeper.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
