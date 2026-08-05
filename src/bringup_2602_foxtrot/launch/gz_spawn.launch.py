@@ -48,7 +48,7 @@ def generate_launch_description():
         ),
         launch_arguments={"gz_args": ['-r -v4 ', world], 'on_exit_shutdown': 'true'}.items(),
     )   
-    # --- Spawn entity into Gazebo from robot_description topic ---
+    #Spawn the robot in Gazebo using ros_gz_sim's create node
     spawn = Node(
         package="ros_gz_sim",
         executable="create",
@@ -56,7 +56,9 @@ def generate_launch_description():
         arguments=[
             "-name", "foxtrot_bot",
             "-topic", "robot_description",
-            "-x", "0.0", "-y", "0.0", "-z", "0.5",
+            "-x", "0.0", 
+            "-y", "10.0", 
+            "-z", "2.5", # Drop altitude above Bridge 1 deck
         ],
     )
 
@@ -138,7 +140,8 @@ def generate_launch_description():
     twist_mux_node = Node(package='twist_mux', 
                     executable='twist_mux',
                     parameters=[twist_mux_params,{'use_sim_time': True}],
-                    remappings=[('/cmd_vel_out','/diffdrive_controller/cmd_vel')]
+                    # REROUTED: Send multiplexed commands to the AEB filter instead of the wheels
+                    remappings=[('/cmd_vel_out','/cmd_vel_raw')] 
     )
 
     twist_mux_node_ack = Node(
@@ -148,7 +151,32 @@ def generate_launch_description():
         remappings=[('/cmd_vel_out', '/ackermann_controller/reference')],
         condition=IfCondition(PythonExpression(["'", robot_type, "' == 'ackermann'"]))
     )
+    # Autonomous Emergency Braking (AEB) Node
+    aeb_filter_node = Node(
+        package='control_2602_foxtrot',
+        executable='aeb_ttc.py',
+        name='kinematic_aeb_filter',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
+        remappings=[
+            ('/cmd_vel', '/diffdrive_controller/cmd_vel') # Final filtered output to the wheels
+        ]
+    )
+    # Wall Following Node
+    supervisor_node = Node(
+        package='control_2602_foxtrot',
+        executable='supervisor.py',
+        name='mode_supervisor',
+        output='screen'
+    )
 
+    wall_follower_node = Node(
+        package='control_2602_foxtrot',
+        executable='wall_follower.py',
+        name='wall_follower_node',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
+    )
     return LaunchDescription([
         DeclareLaunchArgument(
             "robot_type",
@@ -162,7 +190,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "world",
-            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "empty_world.sdf"),
+            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "track.sdf"),
             description="Full path to world SDF file",
         ),
         gz_launch,
@@ -172,11 +200,13 @@ def generate_launch_description():
         joy_node,
         teleop_node,
         twist_mux_node,
-        # twist_mux_node_ack,
-        # We replace the direct node calls with the delayed event handlers
+        aeb_filter_node,
         delay_joint_broad_spawner,
-        delay_diff_drive_spawner,   
-        # Retaining your original commented-out logic for modularity
+        delay_diff_drive_spawner,
+        supervisor_node,     
+        wall_follower_node,   
         # delay_ackermann_spawner,
         # twist_mux_node_ack
+        # twist_mux_node_ack,
+        # We replace the direct node calls with the delayed event handlers
     ])

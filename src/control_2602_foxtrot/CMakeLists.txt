@@ -22,5 +22,13 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+# Install the Python AEB script as an executable
+# Install the Python scripts as executables in the lib directory
+install(PROGRAMS
+  AEB/aeb_ttc.py
+  AEB/wall_follower.py
+  AEB/supervisor.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 ament_package()
