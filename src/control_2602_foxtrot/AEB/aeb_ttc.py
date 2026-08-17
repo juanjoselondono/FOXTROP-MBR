@@ -82,7 +82,7 @@ class KinematicAEBFilter(Node):
         ttc_msg.data = float(ttc_value)
         self.ttc_pub.publish(ttc_msg)
         # -------------------------------------
-        
+        # This creates the twist message to be published when the AEB system is active. 
         filtered_msg = TwistStamped()
         filtered_msg.header = msg.header
         filtered_msg.header.stamp = self.get_clock().now().to_msg()
@@ -90,23 +90,25 @@ class KinematicAEBFilter(Node):
         filtered_msg.twist.angular = msg.twist.angular
         filtered_msg.twist.linear.y = msg.twist.linear.y
         filtered_msg.twist.linear.z = msg.twist.linear.z
-        
+        # --- AEB Logic ---
+        # Allows Reverse & Neutra
         if cmd_vel_forward <= 0.0:
             filtered_msg.twist.linear.x = cmd_vel_forward
             self.cmd_pub.publish(filtered_msg)
             return
-            
+        #  Subtracts the hard safety buffer 0.5m from the total distance to the obstacle.
         available_distance = max(0.0, front_distance - self.safety_margin)
-        
+        #2. Calculate Required Deceleration from the physical kinematic equation: v^2 = u^2 + 2as, rearranged to solve for a (deceleration).
         if available_distance > 0:
             req_decel = (cmd_vel_forward ** 2) / (2.0 * available_distance)
         else:
+            #if there is no obstacle, the required deceleration is set to infinity, indicating an immediate stop is necessary.
             req_decel = float('inf')
-            
+        # publish telemetry    
         decel_msg = Float32()
         decel_msg.data = float(req_decel)
         self.req_decel_pub.publish(decel_msg)
-        
+        #If the required stopping force exceeds the chassis limits ($2.0 m/s^2$), a safe velocity is enforced:
         if req_decel > self.max_deceleration:
             safe_velocity = math.sqrt(2.0 * self.max_deceleration * available_distance)
             self.get_logger().warn(f"AEB INTERVENTION: Clamping velocity to {safe_velocity:.2f} m/s.")

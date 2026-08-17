@@ -18,7 +18,8 @@ setup(
             'AEB/aeb_ttc.py',
             'AEB/wall_follower.py',
             'AEB/supervisor.py', 
-            'AEB/lane_keeper.py'
+            'AEB/lane_keeper.py',
+            'AEB/gap.py'
         ]),
     install_requires=['setuptools'],
     zip_safe=True,

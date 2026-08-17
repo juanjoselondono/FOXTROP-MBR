@@ -1,0 +1,95 @@
+<sdf version="1.9">
+  <world name="ftg_extreme_gauntlet">
+    
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material><ambient>0.2 0.2 0.2 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ========================================== -->
+    <!-- OUTER PERIMETER (20x20m bounding box)      -->
+    <!-- ========================================== -->
+    <model name="outer_north"><pose>0 10 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>20 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>20 0.2 1</size></box></geometry></visual></link></model>
+    <model name="outer_south"><pose>0 -10 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>20 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>20 0.2 1</size></box></geometry></visual></link></model>
+    <model name="outer_east"><pose>10 0 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.2 20 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 20 1</size></box></geometry></visual></link></model>
+    <model name="outer_west"><pose>-10 0 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.2 20 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 20 1</size></box></geometry></visual></link></model>
+
+    <!-- ========================================== -->
+    <!-- INNER CORE (12x12m) Forming a 4m track     -->
+    <!-- ========================================== -->
+    <model name="inner_north"><pose>0 6 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>12 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>12 0.2 1</size></box></geometry></visual></link></model>
+    <model name="inner_south"><pose>0 -6 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>12 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>12 0.2 1</size></box></geometry></visual></link></model>
+    <model name="inner_east"><pose>6 0 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.2 12 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 12 1</size></box></geometry></visual></link></model>
+    <model name="inner_west"><pose>-6 0 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.2 12 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 12 1</size></box></geometry></visual></link></model>
+
+    <!-- ========================================== -->
+    <!-- STAGE 1: Angled Slalom (Going North)       -->
+    <!-- ========================================== -->
+    <!-- 45-degree angled walls forcing diagonal scanning -->
+    <model name="angled_1"><pose>-8 -4 0.5 0 0 0.785398</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.0 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.0 0.2 1</size></box></geometry></visual></link></model>
+    <model name="angled_2"><pose>-8 0 0.5 0 0 -0.785398</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.0 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.0 0.2 1</size></box></geometry></visual></link></model>
+    <model name="angled_3"><pose>-8 4 0.5 0 0 0.785398</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.0 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.0 0.2 1</size></box></geometry></visual></link></model>
+
+    <!-- ========================================== -->
+    <!-- STAGE 2: Bifurcation & Bottleneck (East)   -->
+    <!-- ========================================== -->
+    <!-- Splitter Island: Forces the robot to choose a lane -->
+    <model name="split_island"><pose>-4 8 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2 0.5 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2 0.5 1</size></box></geometry></visual></link></model>
+    
+    <!-- Extreme Bottleneck: Narrows 4m track to a 0.8m gap -->
+    <model name="bottle_top"><pose>2 9.2 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>1.0 1.6 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>1.0 1.6 1</size></box></geometry></visual></link></model>
+    <model name="bottle_bot"><pose>2 6.8 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>1.0 1.6 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>1.0 1.6 1</size></box></geometry></visual></link></model>
+
+    <!-- ========================================== -->
+    <!-- STAGE 3: Overlapping Hairpins (Going South)-->
+    <!-- ========================================== -->
+    <!-- These walls extend past the center line, eliminating line-of-sight -->
+    <model name="hairpin_1"><pose>7.2 4 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.4 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.4 0.2 1</size></box></geometry></visual></link></model>
+    <model name="hairpin_2"><pose>8.8 1 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.4 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.4 0.2 1</size></box></geometry></visual></link></model>
+    <model name="hairpin_3"><pose>7.2 -2 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.4 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.4 0.2 1</size></box></geometry></visual></link></model>
+    <model name="hairpin_4"><pose>8.8 -5 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>2.4 0.2 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>2.4 0.2 1</size></box></geometry></visual></link></model>
+
+    <!-- ========================================== -->
+    <!-- STAGE 4: Chaos Field & The Trap (Going West)-->
+    <!-- ========================================== -->
+    <!-- Clustered debris with irregular sizing -->
+    <model name="chaos_1"><pose>4 -7 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><cylinder><radius>0.4</radius><length>1</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.4</radius><length>1</length></cylinder></geometry></visual></link></model>
+    <model name="chaos_2"><pose>4 -9 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></visual></link></model>
+    <model name="chaos_3"><pose>1 -8 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><cylinder><radius>0.5</radius><length>1</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.5</radius><length>1</length></cylinder></geometry></visual></link></model>
+    <model name="chaos_4"><pose>-2 -7.2 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></visual></link></model>
+    <model name="chaos_5"><pose>-2 -8.8 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.3</radius><length>1</length></cylinder></geometry></visual></link></model>
+    <model name="chaos_6"><pose>-4 -8 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><cylinder><radius>0.4</radius><length>1</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.4</radius><length>1</length></cylinder></geometry></visual></link></model>
+
+    <!-- The Trap: Blocks 75% of the corridor, leaving a 1m gap along the inner wall -->
+    <model name="the_trap"><pose>-7 -8.5 0.5 0 0 0</pose><static>true</static><link name="link"><collision name="collision"><geometry><box><size>0.2 3.0 1</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.2 3.0 1</size></box></geometry></visual></link></model>
+
+  </world>
+</sdf>

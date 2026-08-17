@@ -26,9 +26,10 @@ endif()
 # Install the Python scripts as executables in the lib directory
 install(PROGRAMS
   AEB/aeb_ttc.py
-  AEB/wall_follower.py
-  AEB/supervisor.py
+  AEB/gap.py
   AEB/lane_keeper.py
+  AEB/supervisor.py
+  AEB/wall_follower.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

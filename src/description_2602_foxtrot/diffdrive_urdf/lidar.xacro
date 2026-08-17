@@ -29,7 +29,7 @@
     <sensor name="lidar" type="gpu_lidar">
         <always_on>true</always_on>
         <!-- Frequency of sampling 10hz -->
-        <update_rate>10</update_rate>
+        <update_rate>45</update_rate>
         <visualize>true</visualize>
         <topic>scan</topic>
         <gz_frame_id>lidar_link</gz_frame_id>
@@ -45,7 +45,7 @@
         </scan>
         <!-- Maximum and minimum measurable values in meters -->
         <range>
-            <min>0.12</min>
+            <min>0.05</min>
             <max>12.0</max>
         </range>
         </lidar>
