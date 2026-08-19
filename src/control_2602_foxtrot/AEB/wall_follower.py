@@ -11,19 +11,21 @@ class OptimizedWallFollower(Node):
         
         # PD Control & Geometric Parameters
         self.traj_d = 0.5       
-        self.lookahead_L = 0.5    
-        self.theta_deg = 45.0     
-        self.kp = 2.3  # Slightly increased for snappier cornering
-        self.kd = 0.2            
+        self.lookahead_L = 0.70    # Increased for high-speed stability
+        self.theta_deg = 60.0     
+        self.kp = 2.5              # Slightly raised to handle longer lookahead
+        self.kd = 1.1             # Increased to dampen high-speed oscillation
+        self.alpha_d = 0.7         # Low-pass filter coefficient for derivative
         
-        # Kinematic & Safety Limits (FTG Integration)
-        self.max_velocity = 2.0
-        self.max_angular_vel = 1.8
-        self.max_ray_range = 3.0  # Virtual wall limit
-        self.cornering_repulsion_gain = 2.5
+        # Kinematic & Safety Limits
+        self.max_velocity = 3.5
+        self.max_angular_vel = 4.0
+        self.max_ray_range = 4.0  
+        self.cornering_repulsion_gain = 3.5
         
         # State Variables
         self.prev_error = 0.0
+        self.prev_error_dot = 0.0  # Added for derivative filtering
         self.last_time = 0.0
         self.wf_enabled = False
         
@@ -32,7 +34,7 @@ class OptimizedWallFollower(Node):
         self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
         self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel_nav', 10)
         
-        self.get_logger().info("Optimized PD Wall Follower online. FTG Kinematics engaged.")
+        self.get_logger().info("Advanced PD Wall Follower online. Predictive Kinematics engaged.")
 
     def state_callback(self, msg):
         if self.wf_enabled and not msg.data:
@@ -40,7 +42,6 @@ class OptimizedWallFollower(Node):
         self.wf_enabled = msg.data
 
     def get_clamped_range(self, msg, angle_deg):
-        """ Returns the ray distance, clamped to a maximum range to prevent 'inf' math crashes. """
         angle_rad = math.radians(angle_deg)
         if angle_rad < msg.angle_min or angle_rad > msg.angle_max: 
             return self.max_ray_range
@@ -71,7 +72,7 @@ class OptimizedWallFollower(Node):
                        if abs(msg.angle_min + i * msg.angle_increment) <= cone_rad and 0.1 < r < 4.0]
         min_front_dist = min(front_dists, default=4.0)
 
-        # 2. Geometric Right-Wall Tracking (Clamped)
+        # 2. Geometric Right-Wall Tracking
         b = self.get_clamped_range(msg, -90.0)
         a = self.get_clamped_range(msg, -90.0 + self.theta_deg)
 
@@ -81,26 +82,35 @@ class OptimizedWallFollower(Node):
 
         future_distance = (b * math.cos(alpha)) + (self.lookahead_L * math.sin(alpha))
         
-        # 3. PD Control
+        # 3. Filtered PD Control
         error = self.traj_d - future_distance
-        error_dot = (error - self.prev_error) / dt
+        raw_error_dot = (error - self.prev_error) / dt
+        
+        # Low-pass filter on the derivative term to eliminate steering chatter
+        error_dot = (self.alpha_d * raw_error_dot) + ((1.0 - self.alpha_d) * self.prev_error_dot)
+        
         self.prev_error = error
+        self.prev_error_dot = error_dot
         self.last_time = current_time
         
         angular_vel = (self.kp * error) + (self.kd * error_dot)
 
         # 4. Inward Corner Repulsion Override
-        # If a wall appears in front, inject a strong left turn to prevent collision
         if min_front_dist < 0.9:
             repulsion = (0.9 - min_front_dist) * self.cornering_repulsion_gain
-            angular_vel += repulsion  # Positive rad/s drives left
+            angular_vel += repulsion
 
-        # 5. Kinematic Pipeline (FTG Style Braking)
+        # 5. Advanced Kinematic Pipeline & Traction Management
         angular_vel = max(-self.max_angular_vel, min(self.max_angular_vel, angular_vel))
         
-        # Reduce speed proportionally to steering effort
         turn_ratio = abs(angular_vel) / self.max_angular_vel
-        speed = self.max_velocity * (1.0 - 0.65 * turn_ratio)
+        error_ratio = min(1.0, abs(error) / 0.5) # Normalized error up to 0.5 meters
+        
+        # Exponential drop-off preserves traction in tight turns better than linear
+        base_speed = self.max_velocity * math.exp(-2.5 * turn_ratio)
+        
+        # Predictive braking: Reduce speed proportionately to trajectory error
+        speed = base_speed * (1.0 - 0.4 * error_ratio)
 
         # Emergency frontal braking
         if min_front_dist <= 0.35:

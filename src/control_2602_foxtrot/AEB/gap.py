@@ -14,26 +14,27 @@ class KinematicConfig:
 class PrecisionFTGNode(Node):
     def __init__(self):
         super().__init__('precision_ftg_node')
-        # TRACK Mode
-        # self.cfg = KinematicConfig(
-        #     v_max=6.0, kp_steer=1.8, max_steer_rad=math.radians(70.0),
-        #     max_omega=5.5, max_steer_delta=math.radians(8.0),
-        #     safe_rad=0.25, max_decel=7.0, stop_margin=0.10, lat_margin=0.30,
-        #     dist_emerg=0.40, dist_warn=2.5,
-        #     lidar_horizon=10.0, fov=math.radians(85.0),
-        #     gap_exp=2.0, gap_pen=0.10, scrub=0.45,
-        #     dw_params=[0.20, 0.85, 0.5, 2.0] # Depth Weighting [min, max, offset, scale]
-        # )
-        #Obstacle Avoidance Mode
+        #TRACK Mode
         self.cfg = KinematicConfig(
-            v_max=1.4, kp_steer=2.4, max_steer_rad=math.radians(90.0),
-            max_omega=1.4, max_steer_delta=math.radians(25.0),
-            safe_rad=0.2, max_decel=2.5, stop_margin=0.10, lat_margin=0.20,
-            dist_emerg=0.28, dist_warn=0.75,
-            lidar_horizon=4.0, fov=math.radians(90.0),
-            gap_exp=1.2, gap_pen=0.15, scrub=0.70,
-            dw_params=[0.0, 0.35, 0.4, 1.1] 
+            v_max=6.0, kp_steer=1.8, max_steer_rad=math.radians(70.0),
+            max_omega=5.5, max_steer_delta=math.radians(8.0),
+            safe_rad=0.25, max_decel=7.0, stop_margin=0.10, lat_margin=0.30,
+            dist_emerg=0.40, dist_warn=2.5,
+            lidar_horizon=10.0, fov=math.radians(85.0),
+            gap_exp=2.0, gap_pen=0.10, scrub=0.45,
+            dw_params=[0.20, 0.85, 0.5, 2.0] # Depth Weighting [min, max, offset, scale]
         )
+        #Obstacle Avoidance Mode
+        # self.cfg = KinematicConfig(
+        #     v_max=3.5, kp_steer=5.5, max_steer_rad=math.radians(90.0),
+        #     max_omega=4.0, max_steer_delta=math.radians(30.0),
+        #     safe_rad=0.2, max_decel=3.5, stop_margin=0.10, lat_margin=0.22,
+        #     dist_emerg=0.3, dist_warn=0.75,
+        #     lidar_horizon=4.0, fov=math.radians(90.0),
+        #     gap_exp=1.2, gap_pen=0.15, scrub=0.70,
+        #     dw_params=[0.0, 0.35, 0.4, 1.1] # Depth Weighting [min, max, offset, scale]
+        #     #once the winning gap is chosen, the robot must decide whether to aim at the geometric center of the gap or the deepest point of the gap.
+        # )
         # State Variables
         self.prev_angle = 0.0
         self.target_initialized = False
@@ -120,6 +121,7 @@ class PrecisionFTGNode(Node):
     def _find_best_gap(self, ranges, angle_min, angle_increment):
         """Extracts continuous gaps and selects the most traversable option."""
         gaps, start = [], -1
+        # we scan indexes of the ranges array Whenever it sees a number greater than 0.0, it thinks, "Ah, here is the start of an opening."
         for i, r in enumerate(ranges):
             if r > 0.0:
                 if start == -1: start = i
@@ -132,7 +134,10 @@ class PrecisionFTGNode(Node):
 
         # Filter out noise (gaps smaller than 5 rays)
         viable_gaps = [g for g in gaps if g[1] >= 5] or gaps
-
+        # Score each viable gap using three factors:
+        # 1. Width: Wider gaps are safer and score higher.
+        # 2. Depth: Deeper gaps are strongly preferred because they lead farther ahead.
+        # 3. Straightness: Forward-facing gaps score higher to avoid sharp steering.
         def score_gap(gap):
             g_start, g_len = gap
             g_slice = ranges[g_start : g_start + g_len]
