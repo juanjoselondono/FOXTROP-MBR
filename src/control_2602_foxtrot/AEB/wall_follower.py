@@ -13,11 +13,11 @@ class OptimizedWallFollower(Node):
         self.traj_d = 0.5       
         self.lookahead_L = 0.5    
         self.theta_deg = 45.0     
-        self.kp = 1.8  # Slightly increased for snappier cornering
-        self.kd = 0.15            
+        self.kp = 2.3  # Slightly increased for snappier cornering
+        self.kd = 0.2            
         
         # Kinematic & Safety Limits (FTG Integration)
-        self.max_velocity = 1.0
+        self.max_velocity = 2.0
         self.max_angular_vel = 1.8
         self.max_ray_range = 3.0  # Virtual wall limit
         self.cornering_repulsion_gain = 2.5
