@@ -80,6 +80,57 @@
       </link>
     </model>
 
+        <model name='stl_maze'>
+      <pose>0 0 0 0 0 0</pose>
+      <static>true</static>
+      <link name='link'>
+        <collision name='maze_collision'>
+          <geometry>
+            <mesh>
+              <uri>file:///home/juan-londono/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/src/gazebo_2602_foxtrot/worlds/examen1_v2.stl</uri> #Chamge me           
+              <scale>.0015 .0015 .001</scale>
+            </mesh>
+          </geometry>
+          <surface>
+            <friction>
+              <ode/>
+            </friction>
+            <bounce/>
+            <contact/>
+          </surface>
+        </collision>
+        <visual name='visual'>
+          <geometry>
+            <mesh>
+              <uri>file:///home/juan-londono/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/src/gazebo_2602_foxtrot/worlds/examen1_v2.stl</uri>   #Change me
+              <scale>.0015 .0015 .001</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+            <diffuse>1 0 0 1</diffuse>
+            <specular>1 0 0 1</specular>
+          </material>
+        </visual>
+        <pose>0 0 0 0 0 0</pose>
+        <inertial>
+          <pose>0 0 0 0 0 0</pose>
+          <mass>1</mass>
+          <inertia>
+            <ixx>1</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>1</iyy>
+            <iyz>0</iyz>
+            <izz>1</izz>
+          </inertia>
+        </inertial>
+        <enable_wind>false</enable_wind>
+      </link>
+      <self_collide>false</self_collide>
+    </model>
+
+
   
   </world>
 </sdf>

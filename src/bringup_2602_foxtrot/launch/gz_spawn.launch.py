@@ -66,7 +66,7 @@ def generate_launch_description():
         arguments=[
             "-name", "foxtrot_bot",
             "-topic", "robot_description",
-            "-x", "-4.0", 
+            "-x", "-2.0", 
             "-y", "0.0", 
             "-z", "3.5", # Drop altitude above Bridge 1 deck
         ],
@@ -223,7 +223,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "world",
-            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "exam_track.sdf"),
+            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "exam1_world.sdf"),
             description="Full path to world SDF file",
         ),
         gz_launch,
