@@ -1,6 +1,7 @@
 ## Mobile Robotics: Autonomous Driving Workspace
 
 This is a GitHub template. You can make your own copy by clicking the green "Use this template" button.
+ros2 launch bringup_2602_foxtrot gz_spawn.launch.py robot_type:=diffdrive
 
 ## Requirements knwoledge
 
