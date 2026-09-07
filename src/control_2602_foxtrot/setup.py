@@ -19,8 +19,11 @@ setup(
             'AEB/wall_follower.py',
             'AEB/supervisor.py', 
             'AEB/lane_keeper.py',
-            'AEB/gap.py'
+            'AEB/gap.py',
+            'planning/rrt_pp_2602_foxtrot.py',
+            'tracking/pid_pt_2602_foxtrot.py'
         ]),
+    ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ddrozoa8',

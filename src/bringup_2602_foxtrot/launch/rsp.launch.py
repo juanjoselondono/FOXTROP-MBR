@@ -24,6 +24,7 @@ def generate_launch_description():
         parameters=[{"robot_description": robot_description,
                      "use_sim_time": use_sim_time}],
     )
+    
     # --- Joint State Publisher GUI (Manual Telemetry) ---
     jsp_gui = Node(
         package="joint_state_publisher_gui",
@@ -35,12 +36,13 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "use_sim_time",
-            default_value="false", # Best set to false when testing standalone in RViz
+            default_value="true", # CRITICAL: Must be true so TF syncs with Gazebo physics
             description="Use simulation (Gazebo) clock if true",
         ),
         DeclareLaunchArgument(
             "world",
-            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "empty_world.sdf"),
+            # Routed away from empty_world.sdf to a populated track geometry
+            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "map2.sdf"),
             description="Full path to world SDF file",
         ),
         rsp,

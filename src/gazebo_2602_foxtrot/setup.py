@@ -17,6 +17,9 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.*')),
         (os.path.join('share', package_name, 'config'), glob('config/*.*')),
         
+        # EXPORT THE MAPS DIRECTORY
+        (os.path.join('share', package_name, 'maps'), glob('maps/*.*')),
+        
         # Explicitly export the worlds and meshes for Gazebo
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.sdf') + glob('worlds/*.png')),
         (os.path.join('share', package_name, 'worlds/meshes'), glob('worlds/meshes/*.stl')),
