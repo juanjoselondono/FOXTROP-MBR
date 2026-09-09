@@ -93,17 +93,28 @@ class RRTPlanner(Node):
     def check_collision(self, n1, n2):
         steps = int(math.hypot(n2.x - n1.x, n2.y - n1.y) / self.map_info.resolution)
         threshold = self.get_parameter('collision_threshold').value
+        
+        # Buffer cinemático: 20 cm de radio (~4 celdas a 0.05m/celda)
+        clearance_cells = int(0.20 / self.map_info.resolution) 
+        
         for i in range(steps + 1):
             t = i / max(steps, 1)
             x = n1.x + t * (n2.x - n1.x)
             y = n1.y + t * (n2.y - n1.y)
+            
             ix = int((x - self.map_info.origin.position.x) / self.map_info.resolution)
             iy = int((y - self.map_info.origin.position.y) / self.map_info.resolution)
-            if 0 <= ix < self.map_info.width and 0 <= iy < self.map_info.height:
-                if self.grid[iy][ix] >= threshold or self.grid[iy][ix] == -1:
-                    return True
-            else:
-                return True
+            
+            # Escaneo de perímetro en lugar de punto único
+            for dx in range(-clearance_cells, clearance_cells + 1):
+                for dy in range(-clearance_cells, clearance_cells + 1):
+                    nx, ny = ix + dx, iy + dy
+                    if 0 <= nx < self.map_info.width and 0 <= ny < self.map_info.height:
+                        val = self.grid[ny][nx]
+                        if val >= threshold or val == -1:
+                            return True
+                    else:
+                        return True
         return False
 
     def reconstruct_path(self, node):

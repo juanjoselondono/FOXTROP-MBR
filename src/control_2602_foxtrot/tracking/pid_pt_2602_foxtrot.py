@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Path
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import Twist
 from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs
 import math
@@ -11,9 +11,7 @@ class PIDTracker(Node):
     def __init__(self):
         super().__init__('pid_pt_2602_foxtrot')
         self.path_sub = self.create_subscription(Path, '/planned_path', self.path_cb, 10)
-        
-        # Inyección Directa: Bypass del twist_mux con el formato estricto de ROS 2
-        self.cmd_pub = self.create_publisher(TwistStamped, '/diffdrive_controller/cmd_vel', 10)
+        self.cmd_pub = self.create_publisher(Twist, '/diffdrive_controller/cmd_vel', 10)
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -32,9 +30,11 @@ class PIDTracker(Node):
 
     def path_cb(self, msg):
         self.path = msg
+        self.get_logger().info("Nueva ruta RRT recibida. Iniciando seguimiento.")
 
     def control_loop(self):
-        if not self.path:
+        if not self.path or not self.path.poses:
+            self.publish_stop()
             return
             
         try:
@@ -43,25 +43,31 @@ class PIDTracker(Node):
         except Exception:
             return
 
+        # Verificar si ya llegamos al destino final (Tolerancia de 0.3 metros)
+        last_pose_transformed = tf2_geometry_msgs.do_transform_pose(self.path.poses[-1], transform)
+        dist_to_goal = math.hypot(last_pose_transformed.pose.position.x, last_pose_transformed.pose.position.y)
+        
+        if dist_to_goal < 0.3:
+            self.get_logger().info("¡Meta alcanzada! Deteniendo vehículo.", throttle_duration_sec=2.0)
+            self.path = None
+            self.publish_stop()
+            return
+
         lookahead = self.get_parameter('lookahead').value
         target_point = None
         
         for pose_stamped in self.path.poses:
-            t_pose = tf2_geometry_msgs.do_transform_pose(pose_stamped.pose, transform)
-            x = t_pose.position.x
-            y = t_pose.position.y
+            t_pose = tf2_geometry_msgs.do_transform_pose(pose_stamped, transform)
+            x = t_pose.pose.position.x
+            y = t_pose.pose.position.y
             distance = math.hypot(x, y)
             
             if x > 0 and distance >= lookahead:
-                target_point = t_pose
+                target_point = t_pose.pose
                 break
                 
-        if not target_point and len(self.path.poses) > 0:
-            target_point = tf2_geometry_msgs.do_transform_pose(self.path.poses[-1].pose, transform)
-
         if not target_point:
-            self.publish_stop()
-            return
+            target_point = last_pose_transformed.pose
 
         error = target_point.position.y 
         
@@ -80,20 +86,15 @@ class PIDTracker(Node):
         speed_penalty = 1.0 - (0.5 * (abs(angular_z) / 1.5))
         linear_x = self.get_parameter('v_nominal').value * speed_penalty
         
-        # Reensamblaje del TwistStamped
-        cmd = TwistStamped()
-        cmd.header.stamp = self.get_clock().now().to_msg()
-        cmd.header.frame_id = 'base_link'
-        cmd.twist.linear.x = float(linear_x)
-        cmd.twist.angular.z = float(angular_z)
+        cmd = Twist()
+        cmd.linear.x = float(linear_x)
+        cmd.angular.z = float(angular_z)
         self.cmd_pub.publish(cmd)
 
     def publish_stop(self):
-        cmd = TwistStamped()
-        cmd.header.stamp = self.get_clock().now().to_msg()
-        cmd.header.frame_id = 'base_link'
-        cmd.twist.linear.x = 0.0
-        cmd.twist.angular.z = 0.0
+        cmd = Twist()
+        cmd.linear.x = 0.0
+        cmd.angular.z = 0.0
         self.cmd_pub.publish(cmd)
 
 def main(args=None):
