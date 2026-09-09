@@ -35,7 +35,8 @@ class SimpleEKF(Node):
     """
 
     def __init__(self):
-        super().__init__('ekf_node_2602_zulu')
+        # Nomenclatura unificada para la arquitectura Foxtrot
+        super().__init__('ekf_node_2602_foxtrot')
 
         # ---- Parameters ----
         self.declare_parameter('frequency', 30.0)
@@ -260,8 +261,8 @@ class SimpleEKF(Node):
             tfm.transform.rotation.z = sy
             self.tf_broadcaster.sendTransform(tfm)
 
-def main():
-    rclpy.init()
+def main(args=None):
+    rclpy.init(args=args)
     node = SimpleEKF()
     try:
         rclpy.spin(node)
@@ -269,7 +270,9 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # Validación de contexto para prevenir colapso de rclpy
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
