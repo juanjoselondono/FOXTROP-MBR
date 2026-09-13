@@ -53,7 +53,7 @@ class SimpleEKF(Node):
         self.declare_parameter('wheel_odom_use.yaw_rate', True)
         self.declare_parameter('imu_use.yaw_rate', True)
 
-        self.declare_parameter('P0_diag', [1.0, 1.0, 0.5, 1.0, 1.0])
+        self.declare_parameter('P0_diag', [0.5, 0.8, 0.5, 1.0, 0.5])
         self.declare_parameter('Q_diag',  [0.05, 0.05, 0.02, 0.50, 0.50])
         self.declare_parameter('R_wheel_diag', [0.20, 0.20])
         self.declare_parameter('R_imu_yaw_rate', 0.05)

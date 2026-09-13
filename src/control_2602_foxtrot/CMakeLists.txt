@@ -24,6 +24,7 @@ install(PROGRAMS
   AEB/wall_follower.py
   planning/rrt_pp_2602_foxtrot.py
   tracking/pid_pt_2602_foxtrot.py
+  tracking/track2.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

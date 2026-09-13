@@ -20,27 +20,27 @@ def generate_launch_description():
     declare_map_yaml_cmd = DeclareLaunchArgument('map', default_value=default_map_path)
 
     # 1. Servidor de Mapas
-    map_server_node = Node(
-        package='nav2_map_server',
-        executable='map_server',
-        name='map_server',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time, 'yaml_filename': map_yaml_file}]
-    )
+    # map_server_node = Node(
+    #     package='nav2_map_server',
+    #     executable='map_server',
+    #     name='map_server',
+    #     output='screen',
+    #     parameters=[{'use_sim_time': use_sim_time, 'yaml_filename': map_yaml_file}]
+    # )
 
-    # 2. Administrador del Ciclo de Vida (Bond Timeout extendido para evitar caídas en simulación)
-    lifecycle_manager_node = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager_map',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time, 
-            'autostart': True,  # Obliga a transicionar automáticamente a 'active'
-            'node_names': ['map_server'],
-            'bond_timeout': 15.0
-        }]
-    )
+    # # 2. Administrador del Ciclo de Vida (Bond Timeout extendido para evitar caídas en simulación)
+    # lifecycle_manager_node = Node(
+    #     package='nav2_lifecycle_manager',
+    #     executable='lifecycle_manager',
+    #     name='lifecycle_manager_map',
+    #     output='screen',
+    #     parameters=[{
+    #         'use_sim_time': use_sim_time, 
+    #         'autostart': True,  # Obliga a transicionar automáticamente a 'active'
+    #         'node_names': ['map_server'],
+    #         'bond_timeout': 15.0
+    #     }]
+    # )
     # 3. Planificador Global RRT (Con inflación cinemática)
     rrt_planner_node = Node(
         package='control_2602_foxtrot',
@@ -53,30 +53,30 @@ def generate_launch_description():
     # 4. Controlador Local PID (Bypass directo a diffdrive_controller)
     pid_tracker_node = Node(
         package='control_2602_foxtrot',
-        executable='pid_pt_2602_foxtrot.py',
-        name='pid_pt_2602_foxtrot',
+        executable='track2.py',
+        name='track2',
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}]
     )
 
     # 5. Acoplamiento Geométrico (map -> odom)
     # Calibrado para coincidir exactamente con el spawn del robot en Gazebo (-x -0.3, -y 1.5, -Y 1.57)
-    static_tf_node = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_pub_map_to_odom',
-        arguments=[
-            '--x', '-0.3', 
-            '--y', '1.5', 
-            '--z', '0.0', 
-            '--yaw', '1.57', 
-            '--pitch', '0.0', 
-            '--roll', '0.0', 
-            '--frame-id', 'map', 
-            '--child-frame-id', 'odom'
-        ],
-        output='screen'
-    )
+    # static_tf_node = Node(
+    #     package='tf2_ros',
+    #     executable='static_transform_publisher',
+    #     name='static_tf_pub_map_to_odom',
+    #     arguments=[
+    #         '--x', '-0.3', 
+    #         '--y', '1.5', 
+    #         '--z', '0.0', 
+    #         '--yaw', '1.57', 
+    #         '--pitch', '0.0', 
+    #         '--roll', '0.0', 
+    #         '--frame-id', 'map', 
+    #         '--child-frame-id', 'odom'
+    #     ],
+    #     output='screen'
+    # )
 
     # 6. Integración del Filtro Extendido de Kalman (EKF)
     # Se encarga de publicar dinámicamente la transformación odom -> base_link
@@ -91,13 +91,15 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_map_yaml_cmd)
     
-    ld.add_action(map_server_node)
-    ld.add_action(lifecycle_manager_node)
+    # 1. Servidor de Mapas
+    # ld.add_action(map_server_node)
+    # ld.add_action(lifecycle_manager_node)
     
     ld.add_action(rrt_planner_node)
     ld.add_action(pid_tracker_node)
     
-    ld.add_action(static_tf_node)
+    # 5. Acoplamiento Geométrico (map -> odom)
+    # ld.add_action(static_tf_node)
     ld.add_action(ekf_include)
 
     return ld

@@ -21,7 +21,9 @@ setup(
             'AEB/lane_keeper.py',
             'AEB/gap.py',
             'planning/rrt_pp_2602_foxtrot.py',
-            'tracking/pid_pt_2602_foxtrot.py'
+            'tracking/pid_pt_2602_foxtrot.py',
+            'tracking/track2.py'
+
         ]),
     ],
     install_requires=['setuptools'],
