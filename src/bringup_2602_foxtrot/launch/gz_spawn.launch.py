@@ -66,8 +66,8 @@ def generate_launch_description():
         arguments=[
             "-name", "foxtrot_bot",
             "-topic", "robot_description",
-            "-x", "-0.3",    # <--- Cambia X aquí
-            "-y", "1.5",    # <--- Cambia Y aquí
+            "-x", "-9.3",    # <--- Cambia X aquí
+            "-y", "-0.5",    # <--- Cambia Y aquí
             "-z", "0.2",    # <--- Cambia la altura Z aquí
             "-Y", "0"
         ],
@@ -175,30 +175,30 @@ def generate_launch_description():
         ]
     )
     
-    supervisor_node = Node(
-        package='control_2602_foxtrot',
-        executable='supervisor.py',
-        name='mode_supervisor',
-        output='screen'
-    )
+    # supervisor_node = Node(
+    #     package='control_2602_foxtrot',
+    #     executable='supervisor.py',
+    #     name='mode_supervisor',
+    #     output='screen'
+    # )
     
-    # Wall Following Node
-    wall_follower_node = Node(
-        package='control_2602_foxtrot',
-        executable='wall_follower.py',
-        name='wall_follower_node',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
-    )
+    # # Wall Following Node
+    # wall_follower_node = Node(
+    #     package='control_2602_foxtrot',
+    #     executable='wall_follower.py',
+    #     name='wall_follower_node',
+    #     output='screen',
+    #     parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
+    # )
     
-    # lane keeping node
-    lane_keeper_node = Node(
-        package='control_2602_foxtrot',
-        executable='lane_keeper.py',
-        name='lane_keeper_node',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
-    )
+    # # lane keeping node
+    # lane_keeper_node = Node(
+    #     package='control_2602_foxtrot',
+    #     executable='lane_keeper.py',
+    #     name='lane_keeper_node',
+    #     output='screen',
+    #     parameters=[{'use_sim_time': use_sim_time}] # Forces sync with Gazebo
+    # )
     
     # Follow the gap
     follow_gap_node = Node(
@@ -224,7 +224,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "world",
-            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "map2.sdf"),
+            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "exam1_world.sdf"),
             description="Full path to world SDF file",
         ),
         gz_launch,
@@ -237,12 +237,14 @@ def generate_launch_description():
         aeb_filter_node,
         delay_joint_broad_spawner,
         delay_diff_drive_spawner,
-        supervisor_node,     
-        wall_follower_node,
+        # supervisor_node,     
+        # wall_follower_node,
         follow_gap_node,
         #lane_keeper_node   
         # delay_ackermann_spawner,
         # twist_mux_node_ack
         # twist_mux_node_ack,
         # We replace the direct node calls with the delayed event handlers
+
+        
     ])

@@ -1,7 +1,7 @@
-image: map2.pgm
+image: bringup_2602_foxtrot.pgm
 mode: trinary
 resolution: 0.050
-origin: [-10.076, -10.155, 0]
+origin: [-12.776, -9.294, 0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196

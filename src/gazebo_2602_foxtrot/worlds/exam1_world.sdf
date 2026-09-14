@@ -87,7 +87,7 @@
         <collision name='maze_collision'>
           <geometry>
             <mesh>
-              <uri>file:///home/juan-londono/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/src/gazebo_2602_foxtrot/worlds/examen1_v2.stl</uri> #Chamge me           
+              <uri>/home/barcobasurero/Documentos/FOXTROP-MBR/src/gazebo_2602_foxtrot/worlds/meshes/examen1_v2.stl</uri> #Chamge me           
               <scale>.0015 .0015 .001</scale>
             </mesh>
           </geometry>
@@ -102,7 +102,7 @@
         <visual name='visual'>
           <geometry>
             <mesh>
-              <uri>file:///home/juan-londono/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/src/gazebo_2602_foxtrot/worlds/examen1_v2.stl</uri>   #Change me
+              <uri>/home/barcobasurero/Documentos/FOXTROP-MBR/src/gazebo_2602_foxtrot/worlds/meshes/examen1_v2.stl</uri>   #Change me
               <scale>.0015 .0015 .001</scale>
             </mesh>
           </geometry>
