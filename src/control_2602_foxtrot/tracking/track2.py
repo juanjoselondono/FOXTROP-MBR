@@ -6,6 +6,7 @@ from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
 from nav_msgs.msg import Path
 from std_msgs.msg import Float64
+from tf2_ros import Buffer, TransformListener
 
 
 
@@ -13,17 +14,19 @@ class track2(Node):
     def __init__(self):
         # Inicializa el nodo
         super().__init__('track2')
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Mensaje de inicio
         self.get_logger().info('¡El nodo base ha sido iniciado!')
 
         # Subscribers
-        self.subscription = self.create_subscription(
-            Odometry,
-            '/ekf/odometry',
-            self.odom_callback,
-            10
-        )
+        # self.subscription = self.create_subscription(
+        #     Odometry,
+        #     '/ekf/odometry',
+        #     self.odom_callback,
+        #     10
+        # )
 
         self.publishData = self.create_publisher(
                     Float64,
@@ -74,25 +77,25 @@ class track2(Node):
         )
 
 
-    def odom_callback(self, msg):
+    # def odom_callback(self, msg):
 
-        self.current_position = np.array([
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y
-        ])
+    #     self.current_position = np.array([
+    #         msg.pose.pose.position.x,
+    #         msg.pose.pose.position.y
+    #     ])
 
-        q = msg.pose.pose.orientation
+    #     q = msg.pose.pose.orientation
 
-        # Quaternion -> yaw
-        self.current_yaw = np.arctan2(
-            2.0 * (q.w * q.z + q.x * q.y),
-            1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        )
+    #     # Quaternion -> yaw
+    #     self.current_yaw = np.arctan2(
+    #         2.0 * (q.w * q.z + q.x * q.y),
+    #         1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+    #     )
 
-        self.get_logger().info(
-            f"Posición actual: {self.current_position} | "
-            f"Yaw actual: {np.degrees(self.current_yaw):.2f} deg"
-        )
+    #     self.get_logger().info(
+    #         f"Posición actual: {self.current_position} | "
+    #         f"Yaw actual: {np.degrees(self.current_yaw):.2f} deg"
+    #     )
 
 
 
@@ -122,6 +125,28 @@ class track2(Node):
 
     def timer_callback(self):
 
+        try:
+            # Preguntar a TF la posición del robot en el mapa
+            trans = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
+            
+            # Actualizar la posición actual
+            self.current_position = np.array([
+                trans.transform.translation.x,
+                trans.transform.translation.y
+            ])
+            
+            # Extraer el Yaw desde el cuaternión
+            q = trans.transform.rotation
+            self.current_yaw = np.arctan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            )
+        except Exception as e:
+        # Si la transformación aún no existe, no hace nada y espera al siguiente ciclo
+          return
+
+        robot = self.current_position
+
         # ---------------------------------------------
         # Verificar que exista una trayectoria
         # ---------------------------------------------
@@ -132,7 +157,7 @@ class track2(Node):
         if len(self.current_path) < 2:
             return
 
-        robot = self.current_position
+      
 
         # ---------------------------------------------
         # Buscar el punto de la trayectoria más cercano
@@ -251,7 +276,7 @@ class track2(Node):
         # Velocidad lineal
         # ---------------------------------------------
 
-        kv = 1.2
+        kv = 2.2
 
         v_lineal = kv * distancia
 
