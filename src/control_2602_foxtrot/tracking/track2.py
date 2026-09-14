@@ -290,7 +290,7 @@ class track2(Node):
         self.v_lineal = np.clip(
             v_lineal,
             0.0,
-            0.5
+            0.8
         )
 
         # ---------------------------------------------

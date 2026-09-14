@@ -94,8 +94,8 @@ class RRTPlanner(Node):
         steps = int(math.hypot(n2.x - n1.x, n2.y - n1.y) / self.map_info.resolution)
         threshold = self.get_parameter('collision_threshold').value
         
-        # Buffer cinemático: 20 cm de radio (~4 celdas a 0.05m/celda)
-        clearance_cells = int(0.20 / self.map_info.resolution) 
+        # Buffer cinemático: 30 cm de radio (~6 celdas a 0.05m/celda)
+        clearance_cells = int(0.30 / self.map_info.resolution) 
         
         for i in range(steps + 1):
             t = i / max(steps, 1)

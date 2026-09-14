@@ -18,5 +18,12 @@ diffdrive_controller:
     wheel_separation: 0.44 
     wheel_radius: 0.05
     
+    linear.x.has_velocity_limits: true
+    linear.x.max_velocity: 5.5
+    linear.x.min_velocity: -5.5
+    angular.z.has_velocity_limits: true
+    angular.z.max_velocity: 10.0
+    angular.z.min_velocity: -10.0
+    
     # CRITICAL INJECTION: Surrender TF authority to the EKF
     enable_odom_tf: false

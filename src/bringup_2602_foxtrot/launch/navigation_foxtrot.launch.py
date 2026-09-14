@@ -41,42 +41,27 @@ def generate_launch_description():
     #         'bond_timeout': 15.0
     #     }]
     # )
-    # 3. Planificador Global RRT (Con inflación cinemática)
-    rrt_planner_node = Node(
-        package='control_2602_foxtrot',
-        executable='rrt_pp_2602_foxtrot.py',
-        name='rrt_pp_2602_foxtrot',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
-    )
+    # Integración de Nav2 Oficial (MPPI + NavFn)
+    bringup_pkg_dir = get_package_share_directory('bringup_2602_foxtrot')
+    nav2_params_path = os.path.join(bringup_pkg_dir, 'config', 'nav2_params.yaml')
 
-    # 4. Controlador Local PID (Bypass directo a diffdrive_controller)
-    pid_tracker_node = Node(
-        package='control_2602_foxtrot',
-        executable='track2.py',
-        name='track2',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
+    nav2_launch_path = os.path.join(get_package_share_directory('nav2_bringup'), 'launch', 'navigation_launch.py')
+    
+    nav2_include = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(nav2_launch_path),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'params_file': nav2_params_path
+        }.items()
     )
-
-    # 5. Acoplamiento Geométrico (map -> odom)
-    # Calibrado para coincidir exactamente con el spawn del robot en Gazebo (-x -0.3, -y 1.5, -Y 1.57)
-    # static_tf_node = Node(
-    #     package='tf2_ros',
-    #     executable='static_transform_publisher',
-    #     name='static_tf_pub_map_to_odom',
-    #     arguments=[
-    #         '--x', '-0.3', 
-    #         '--y', '1.5', 
-    #         '--z', '0.0', 
-    #         '--yaw', '1.57', 
-    #         '--pitch', '0.0', 
-    #         '--roll', '0.0', 
-    #         '--frame-id', 'map', 
-    #         '--child-frame-id', 'odom'
-    #     ],
-    #     output='screen'
-    # )
+    
+    # Nodo conversor de Twist a TwistStamped (para sortear problemas de tipos de mensaje en Gazebo/ROS2)
+    nav2_converter_node = Node(
+        package='control_2602_foxtrot',
+        executable='nav2_converter.py',
+        name='nav2_converter',
+        output='screen'
+    )
 
     # 6. Integración del Filtro Extendido de Kalman (EKF)
     # Se encarga de publicar dinámicamente la transformación odom -> base_link
@@ -91,15 +76,8 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_map_yaml_cmd)
     
-    # 1. Servidor de Mapas
-    # ld.add_action(map_server_node)
-    # ld.add_action(lifecycle_manager_node)
-    
-    ld.add_action(rrt_planner_node)
-    ld.add_action(pid_tracker_node)
-    
-    # 5. Acoplamiento Geométrico (map -> odom)
-    # ld.add_action(static_tf_node)
+    ld.add_action(nav2_include)
+    ld.add_action(nav2_converter_node)
     ld.add_action(ekf_include)
 
     return ld
