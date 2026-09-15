@@ -23,8 +23,12 @@ install(PROGRAMS
   AEB/supervisor.py
   AEB/wall_follower.py
   planning/rrt_pp_2602_foxtrot.py
+  planning/nav2_converter.py
+  planning/astar_planner.py
   tracking/pid_pt_2602_foxtrot.py
   tracking/track2.py
+  tracking/rpp_dwa_tracker.py
+  tracking/mppi_tracker.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

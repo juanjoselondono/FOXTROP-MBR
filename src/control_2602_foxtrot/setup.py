@@ -23,7 +23,9 @@ setup(
             'planning/rrt_pp_2602_foxtrot.py',
             'tracking/pid_pt_2602_foxtrot.py',
             'tracking/track2.py',
-            'planning/nav2_converter.py'
+            'planning/nav2_converter.py',
+            'planning/astar_planner.py',
+            'tracking/rpp_dwa_tracker.py'
         ]),
     ],
     install_requires=['setuptools'],

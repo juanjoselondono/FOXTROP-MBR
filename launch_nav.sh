@@ -25,7 +25,7 @@ tmux set-option -g mouse on
 
 # Panel 1: Gazebo Simulación
 tmux send-keys -t $P_GZ "source /opt/ros/jazzy/setup.bash && source install/setup.bash" C-m
-tmux send-keys -t $P_GZ "ros2 launch bringup_2602_foxtrot gz_spawn.launch.py world:=src/gazebo_2602_foxtrot/worlds/map2.sdf gz_mode:=False" C-m
+tmux send-keys -t $P_GZ "ros2 launch bringup_2602_foxtrot gz_spawn.launch.py world:=src/gazebo_2602_foxtrot/worlds/exam1_world.sdf gz_mode:=False" C-m
 
 # Panel 2: Navigation (EKF + Trackers)
 tmux send-keys -t $P_NAV "source /opt/ros/jazzy/setup.bash && source install/setup.bash" C-m
