@@ -84,9 +84,13 @@ class AStarPlanner(Node):
     def get_robot_pose(self):
         try:
             trans = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
-            return trans.transform.translation.x, trans.transform.translation.y
+            q = trans.transform.rotation
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            return trans.transform.translation.x, trans.transform.translation.y, yaw
         except Exception:
-            return None, None
+            return None, None, None
 
     def world_to_small_map(self, wx, wy):
         if not self.map_info: return None, None
@@ -129,7 +133,7 @@ class AStarPlanner(Node):
         if self.small_grid is None or self.current_goal is None:
             return
 
-        rx, ry = self.get_robot_pose()
+        rx, ry, ryaw = self.get_robot_pose()
         if rx is None:
             return
 
@@ -147,6 +151,9 @@ class AStarPlanner(Node):
         
         expanded_nodes = 0
         found = False
+        
+        dir_x = math.cos(ryaw)
+        dir_y = math.sin(ryaw)
 
         while open_set:
             current_f, current = heapq.heappop(open_set)
@@ -158,6 +165,16 @@ class AStarPlanner(Node):
                 
             for neighbor in self.get_neighbors(current):
                 step_cost = math.sqrt((current[0]-neighbor[0])**2 + (current[1]-neighbor[1])**2)
+                
+                # F1 constraint: Penalize backward movement within 40 cells (~4m) of start
+                dist_from_start = math.sqrt((current[0] - start[0])**2 + (current[1] - start[1])**2)
+                if dist_from_start < 40:
+                    vec_x = neighbor[0] - current[0]
+                    vec_y = neighbor[1] - current[1]
+                    dot = (vec_x * dir_x) + (vec_y * dir_y)
+                    if dot < 0:
+                        step_cost += 5000.0
+                
                 tentative_g_score = g_score[current] + step_cost
                 
                 if neighbor not in g_score or tentative_g_score < g_score[neighbor]:

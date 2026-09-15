@@ -17,15 +17,8 @@ class ModeSupervisor(Node):
 
     def publish_states(self):
         self.aeb_pub.publish(Bool(data=False))
-        self.wf_pub.publish(Bool(data=False))
+        self.wf_pub.publish(Bool(data=False)) # REVERT: Desactivar wall_follower para que A*/Stanley tome el control
         self.ftg_pub.publish(Bool(data=False))
-
-        # Inyectar señal falsa para mantener abierto el twist_mux
-        joy_msg = Joy()
-        joy_msg.header.stamp = self.get_clock().now().to_msg()
-        joy_msg.axes = [0.0] * 8
-        joy_msg.buttons = [1] * 15 
-        self.joy_pub.publish(joy_msg)
 
 def main(args=None):
     rclpy.init(args=args)

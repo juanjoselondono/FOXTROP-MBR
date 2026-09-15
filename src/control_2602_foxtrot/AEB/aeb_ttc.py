@@ -12,7 +12,7 @@ class KinematicAEBFilter(Node):
     def __init__(self):
         super().__init__('kinematic_aeb_filter')
         
-        self.max_deceleration = 4.0  
+        self.max_deceleration = 8.0  
         self.safety_margin = 0.2     
         self.front_cone_angle = 1.0  # What it represents: The angular width of the monitoring zone directly ahead of the vehicle.
         

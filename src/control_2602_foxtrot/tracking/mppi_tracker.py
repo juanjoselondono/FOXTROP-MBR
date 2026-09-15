@@ -10,321 +10,222 @@ from tf2_ros import LookupException, ConnectivityException, ExtrapolationExcepti
 import numpy as np
 import math
 import time
-from scipy.spatial import cKDTree
-from rclpy.qos import qos_profile_sensor_data
 
 class MPPITracker(Node):
     def __init__(self):
-        super().__init__('mppi_tracker')
+        super().__init__('mppi_tracker') 
         
-        # Parameters
-        self.declare_parameter('num_samples', 300)
-        self.declare_parameter('horizon_seconds', 1.5)
-        self.declare_parameter('control_frequency', 20.0)
-        self.declare_parameter('temperature', 0.5)
+        # =======================================================
+        # DINÁMICA STANLEY (Parámetros Mecánicos de Precisión)
+        # =======================================================
+        self.declare_parameter('control_frequency', 50.0) 
+        self.declare_parameter('wheelbase', 0.42)          
+        self.declare_parameter('max_steering_angle', 2.0)  
         
-        self.declare_parameter('wheelbase', 0.33)
-        self.declare_parameter('max_steering_angle', 0.6)
-        self.declare_parameter('max_velocity', 4.0)
-        self.declare_parameter('max_acceleration', 3.0)
-        self.declare_parameter('max_deceleration', 4.0)
+        self.declare_parameter('max_velocity', 8.0)       # FULL SEND F1 MODE
+        self.declare_parameter('min_velocity', 3.0)        # Never crawl
+        self.declare_parameter('max_acceleration', 5.0)   # Aggressive launch
+        self.declare_parameter('max_deceleration', 8.0)   # Hard braking for corners
         
-        # Costs — Path Tracking Strict profile
-        self.declare_parameter('weight_path', 40.0)        # DOMINANT: stay on the path
-        self.declare_parameter('weight_heading', 10.0)      # HIGH: face the right direction
-        self.declare_parameter('weight_velocity', 5.0)      # MODERATE: reach v_target but don't sacrifice path
-        self.declare_parameter('weight_steering', 2.0)      # Penalize excessive steering
-        self.declare_parameter('weight_smoothness', 1.0)    # Penalize abrupt steering changes
-        self.declare_parameter('weight_collision', 500.0)   # SOFT: delegate hard braking to AEB
+        self.declare_parameter('k_stanley', 4.0)           # Tuned for high-speed stability
+        self.declare_parameter('k_soft', 1.0)              # Reducido para que responda rápido a velocidades bajas
+        
+        self.declare_parameter('repulsion_radius', 1.0)   
+        self.declare_parameter('repulsion_gain', 1.7)      
 
-        # Safety — soft avoidance radius (AEB handles the hard stop)
-        self.declare_parameter('collision_radius', 0.30)
-        self.declare_parameter('lidar_min_range', 0.4)     # Ignore self-collision below this
-
-        # Subs / Pubs — Pipeline: MPPI → /cmd_vel_raw (TwistStamped) → AEB → controller
         self.path_sub = self.create_subscription(Path, '/plan', self.path_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/ekf/odometry', self.odom_callback, 10)
-        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, rclpy.qos.qos_profile_sensor_data)
         self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel_raw', 10)
         
-        # TF2 — resolve map→base_link for correct spatial alignment
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
-        # State — cached for async operation
         self.global_path = None
-        self.cached_local_ref = None   # Last valid local reference for async operation
         self.current_vel = 0.0
-        self.kdtree = None
+        self.cmd_v_prev = 0.0 
         
-        # Compute dynamic params
+        self.closest_obstacle_dist = 999.0
+        self.closest_obstacle_angle = 0.0
+        
         self.dt = 1.0 / self.get_parameter('control_frequency').value
-        self.horizon_steps = int(self.get_parameter('horizon_seconds').value / self.dt)
-        
-        # Nominal control sequence (accel, steer)
-        # SEED with small positive acceleration to break static inertia
-        self.U_a = np.full(self.horizon_steps, 0.5)
-        self.U_s = np.zeros(self.horizon_steps)
-        
-        self.a_std = 1.5   # Wide exploration for acceleration
-        self.s_std = 0.4    # Moderate steering exploration
-        
         self.timer = self.create_timer(self.dt, self.control_loop)
-        self.get_logger().info(
-            f"MPPI Tracker initialized | H={self.horizon_steps} steps | dt={self.dt:.3f}s | "
-            f"Publishing TwistStamped → /cmd_vel_raw"
-        )
+        
+        self.get_logger().info("Controlador STANLEY en línea. Freno Ortogonal (Anti-Orbiting) activado.")
 
     def path_callback(self, msg):
-        self.global_path = msg.poses
+        if len(msg.poses) < 2:
+            return
+        self.global_path = np.array([[p.pose.position.x, p.pose.position.y] for p in msg.poses])
 
     def odom_callback(self, msg):
-        # Only read velocity from odometry. Pose comes from TF2 (map frame).
         self.current_vel = msg.twist.twist.linear.x
 
     def scan_callback(self, msg):
         ranges = np.array(msg.ranges)
         angles = msg.angle_min + np.arange(len(ranges)) * msg.angle_increment
-        min_range = self.get_parameter('lidar_min_range').value
-        valid = (ranges >= min_range) & (ranges < 10.0) & np.isfinite(ranges)
-        ox = ranges[valid] * np.cos(angles[valid])
-        oy = ranges[valid] * np.sin(angles[valid])
+        min_range = 0.15
         
-        if len(ox) > 0:
-            self.kdtree = cKDTree(np.column_stack((ox, oy)))
+        valid = (ranges >= min_range) & (ranges < 5.0) & np.isfinite(ranges)
+        if np.any(valid):
+            valid_ranges = ranges[valid]
+            valid_angles = angles[valid]
+            min_idx = np.argmin(valid_ranges)
+            self.closest_obstacle_dist = valid_ranges[min_idx]
+            self.closest_obstacle_angle = valid_angles[min_idx]
         else:
-            self.kdtree = None
+            self.closest_obstacle_dist = 999.0
 
     def get_yaw(self, q):
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         return math.atan2(siny_cosp, cosy_cosp)
 
-    def extract_local_reference(self, rx, ry, ryaw):
-        if not self.global_path:
-            return self.cached_local_ref  # Async: use last valid reference
-        
-        path_xy = np.array([[p.pose.position.x, p.pose.position.y] for p in self.global_path])
-        if len(path_xy) < 2:
-            return self.cached_local_ref
-            
-        dists = np.linalg.norm(path_xy - np.array([rx, ry]), axis=1)
-        closest_idx = np.argmin(dists)
-        
-        # Lookahead: advance index so the car anticipates curves
-        # Protect: never leave fewer than 2 points in the remaining segment
-        closest_idx = min(closest_idx + 3, max(0, len(path_xy) - 2))
-        
-        dist_to_goal = math.hypot(path_xy[-1, 0] - rx, path_xy[-1, 1] - ry)
-        
-        end_idx = min(closest_idx + self.horizon_steps + 10, len(path_xy))
-        ref_segment = path_xy[closest_idx:end_idx]
-        
-        if len(ref_segment) < 2:
-            return self.cached_local_ref
-            
-        dx = ref_segment[:, 0] - rx
-        dy = ref_segment[:, 1] - ry
-        
-        c = math.cos(-ryaw)
-        s = math.sin(-ryaw)
-        local_x = dx * c - dy * s
-        local_y = dx * s + dy * c
-        local_path = np.column_stack((local_x, local_y))
-        
-        # Curvature-aware velocity profile
-        dx_path = np.gradient(local_x)
-        dy_path = np.gradient(local_y)
-        ddx_path = np.gradient(dx_path)
-        ddy_path = np.gradient(dy_path)
-        
-        denom = (dx_path**2 + dy_path**2)**1.5
-        curvature = np.zeros_like(denom)
-        mask = denom > 1e-6
-        curvature[mask] = np.abs(dx_path[mask] * ddy_path[mask] - dy_path[mask] * ddx_path[mask]) / denom[mask]
-        
-        a_lat_max = 2.5
-        v_max = self.get_parameter('max_velocity').value
-        v_target = np.sqrt(a_lat_max / (curvature + 0.01))
-        v_target = np.clip(v_target, 0.8, v_max)
-        
-        # Pad or trim to match horizon_steps
-        H = self.horizon_steps
-        if len(local_path) > H:
-            local_path = local_path[:H]
-            v_target = v_target[:H]
-        else:
-            pad_len = H - len(local_path)
-            local_path = np.vstack((local_path, np.tile(local_path[-1], (pad_len, 1))))
-            v_target = np.append(v_target, np.full(pad_len, 0.0))
-        
-        ref_yaw = np.arctan2(np.gradient(local_path[:, 1]), np.gradient(local_path[:, 0]))
-            
-        result = (local_path, v_target, ref_yaw, dist_to_goal)
-        self.cached_local_ref = result  # Cache for async operation
-        return result
-
     def stop_vehicle(self):
+        decel = self.get_parameter('max_deceleration').value
+        self.cmd_v_prev = max(0.0, self.cmd_v_prev - decel * self.dt)
+        
+        if self.cmd_v_prev < 0.05:
+            self.cmd_v_prev = 0.0
+            
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
-        msg.twist.linear.x = 0.0
+        msg.twist.linear.x = float(self.cmd_v_prev)
         msg.twist.angular.z = 0.0
         self.cmd_pub.publish(msg)
 
     def control_loop(self):
         t0 = time.perf_counter()
         
-        # Get robot pose in MAP frame via TF2
+        if self.global_path is None or len(self.global_path) < 2:
+            self.stop_vehicle()
+            return
+            
         try:
             trans = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
             rx = trans.transform.translation.x
             ry = trans.transform.translation.y
-            q = trans.transform.rotation
-            ryaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+            ryaw = self.get_yaw(trans.transform.rotation)
         except (LookupException, ConnectivityException, ExtrapolationException):
-            self.get_logger().warn("Esperando TF map->base_link...", throttle_duration_sec=2.0)
             self.stop_vehicle()
-            return
-        
-        # Async: try to extract reference, fall back to cached
-        ref = self.extract_local_reference(rx, ry, ryaw)
-        if not ref:
-            self.get_logger().warn("Falta ruta o está fuera de alcance. Deteniendo...", throttle_duration_sec=2.0)
-            self.stop_vehicle()
-            return
-            
-        local_path, v_ref, yaw_ref, dist_to_goal = ref
-        
-        if dist_to_goal < 0.3:
-            self.stop_vehicle()
-            self.get_logger().info("Goal reached! Stopping.")
             return
 
-        N = self.get_parameter('num_samples').value
-        H = self.horizon_steps
-        dt = self.dt
         L = self.get_parameter('wheelbase').value
-        v_max = self.get_parameter('max_velocity').value
-        a_max = self.get_parameter('max_acceleration').value
-        d_max = self.get_parameter('max_deceleration').value
-        s_max = self.get_parameter('max_steering_angle').value
+        max_steer = self.get_parameter('max_steering_angle').value
         
-        # Generate perturbations
-        noise_a = np.random.normal(0, self.a_std, (N, H))
-        noise_s = np.random.normal(0, self.s_std, (N, H))
-        
-        A = np.clip(self.U_a + noise_a, -d_max, a_max)
-        S = np.clip(self.U_s + noise_s, -s_max, s_max)
-        
-        # === Vectorized Kinematic Bicycle Rollout ===
-        x = np.zeros((N, H))
-        y = np.zeros((N, H))
-        yaw = np.zeros((N, H))
-        v = np.zeros((N, H))
-        
-        curr_v = np.full(N, max(self.current_vel, 0.0))
-        curr_x = np.zeros(N)
-        curr_y = np.zeros(N)
-        curr_yaw = np.zeros(N)
-        
-        for t in range(H):
-            curr_v = np.clip(curr_v + A[:, t] * dt, 0.0, v_max)
-            curr_x = curr_x + curr_v * np.cos(curr_yaw) * dt
-            curr_y = curr_y + curr_v * np.sin(curr_yaw) * dt
-            curr_yaw = curr_yaw + (curr_v / L) * np.tan(S[:, t]) * dt
-            
-            x[:, t] = curr_x
-            y[:, t] = curr_y
-            yaw[:, t] = curr_yaw
-            v[:, t] = curr_v
-            
-        # === Cost Function ===
-        costs = np.zeros(N)
-        
-        # 1. Path tracking (squared distance to reference)
-        w_path = self.get_parameter('weight_path').value
-        dist_sq = (x - local_path[:, 0])**2 + (y - local_path[:, 1])**2
-        costs += np.sum(dist_sq, axis=1) * w_path
-        
-        # 2. Velocity tracking (CRITICAL for breaking static inertia)
-        w_vel = self.get_parameter('weight_velocity').value
-        v_err = (v - v_ref)**2
-        costs += np.sum(v_err, axis=1) * w_vel
-        
-        # 3. Heading tracking
-        w_head = self.get_parameter('weight_heading').value
-        yaw_err = np.square(np.arctan2(np.sin(yaw - yaw_ref), np.cos(yaw - yaw_ref)))
-        costs += np.sum(yaw_err, axis=1) * w_head
+        fx = rx + L * math.cos(ryaw)
+        fy = ry + L * math.sin(ryaw)
 
-        # 4. Soft obstacle avoidance (AEB handles hard braking)
-        num_collisions = 0
-        if self.kdtree is not None:
-            w_coll = self.get_parameter('weight_collision').value
-            r_coll = self.get_parameter('collision_radius').value
+        dists = np.hypot(self.global_path[:, 0] - fx, self.global_path[:, 1] - fy)
+        closest_idx = int(np.argmin(dists))
+        
+        if closest_idx >= len(self.global_path) - 1:
+            closest_idx = len(self.global_path) - 2
             
-            pts_flat = np.column_stack((x.ravel(), y.ravel()))
-            obs_dists, _ = self.kdtree.query(pts_flat, k=1)
-            obs_dists = obs_dists.reshape(N, H)
+        goal_x = self.global_path[-1, 0]
+        goal_y = self.global_path[-1, 1]
+        dist_to_goal = math.hypot(goal_x - fx, goal_y - fy)
+        
+        # =======================================================
+        # FRENO ORTOGONAL (Evitar el bucle de "Goal Orbiting")
+        # =======================================================
+        # Calcular si la meta ha quedado detrás del morro del vehículo
+        dx_goal = goal_x - fx
+        dy_goal = goal_y - fy
+        dot_product = dx_goal * math.cos(ryaw) + dy_goal * math.sin(ryaw)
+        passed_goal = (dot_product < 0.0) and (dist_to_goal < 1.0)
+        
+        # Condición de ancla extendida (0.4m) o superación física de la meta
+        if dist_to_goal < 0.4 or closest_idx >= len(self.global_path) - 2 or passed_goal:
+            self.stop_vehicle()
+            if passed_goal:
+                self.get_logger().info("Meta superada. Anclaje de emergencia activado.", throttle_duration_sec=2.0)
+            else:
+                self.get_logger().info("Estacionamiento preciso completado.", throttle_duration_sec=2.0)
+            return
             
-            # SOFT gradient cost: closer = more expensive (not binary kill)
-            # 1/d cost provides a smooth gradient that pushes trajectories away
-            min_obs_per_traj = np.min(obs_dists, axis=1)
-            costs += w_coll / (min_obs_per_traj + 0.1)
-            
-            # Only add a hard penalty if VERY close (half collision radius)
-            hard_coll = min_obs_per_traj < (r_coll * 0.5)
-            costs[hard_coll] += w_coll * 10.0
-            num_collisions = int(np.sum(hard_coll))
+        px = self.global_path[closest_idx, 0]
+        py = self.global_path[closest_idx, 1]
+        
+        px_next = self.global_path[closest_idx + 1, 0]
+        py_next = self.global_path[closest_idx + 1, 1]
+        
+        path_yaw = math.atan2(py_next - py, px_next - px)
+        
+        theta_e = path_yaw - ryaw
+        theta_e = math.atan2(math.sin(theta_e), math.cos(theta_e)) 
+        
+        cross_prod = (px_next - px) * (fy - py) - (py_next - py) * (fx - px)
+        e_y = math.copysign(dists[closest_idx], cross_prod)
+        
+        k_stanley = self.get_parameter('k_stanley').value
+        k_soft = self.get_parameter('k_soft').value
+        
+        stanley_steer = theta_e + math.atan2(-k_stanley * e_y, abs(self.current_vel) + k_soft)
+        
+        # Atenuación de dirección terminal (evita zig-zag al llegar)
+        if dist_to_goal < 1.5:
+            stanley_steer *= (dist_to_goal / 1.5)
 
-        # 5. Control effort (LOW to allow aggressive driving)
-        w_steer = self.get_parameter('weight_steering').value
-        w_smooth = self.get_parameter('weight_smoothness').value
-        costs += np.sum(S**2, axis=1) * w_steer
-        costs += np.sum(np.diff(S, axis=1)**2, axis=1) * w_smooth
+        repulsion_radius = self.get_parameter('repulsion_radius').value
+        repulsion_gain = self.get_parameter('repulsion_gain').value
         
-        # === MPPI Weighted Update ===
-        lam = self.get_parameter('temperature').value
-        beta = np.min(costs)
-        weights = np.exp(-(1.0 / lam) * (costs - beta))
-        eta = np.sum(weights) + 1e-10
-        weights /= eta
+        if self.closest_obstacle_dist < repulsion_radius:
+            repulsion = (repulsion_radius - self.closest_obstacle_dist) * repulsion_gain
+            if self.closest_obstacle_angle > 0: 
+                stanley_steer -= repulsion      
+            else:                               
+                stanley_steer += repulsion      
+
+        steer_angle = float(np.clip(stanley_steer, -max_steer, max_steer))
+
+        # =======================================================
+        # PERFILADO DE VELOCIDAD DE ARRASTRE (Creep Velocity)
+        # =======================================================
+        max_v = self.get_parameter('max_velocity').value
+        min_v = self.get_parameter('min_velocity').value
+        creep_v = 0.6 
+        # 2. MODULACIÓN DE VELOCIDAD (Frenado en curvas)
+        if dist_to_goal < 4.0:
+            target_vel = max(creep_v, min_v * (dist_to_goal / 4.0))
+        else:
+            future_idx = closest_idx
+            for i in range(closest_idx, len(self.global_path)):
+                if math.hypot(self.global_path[i, 0] - fx, self.global_path[i, 1] - fy) > 6.0:
+                    future_idx = i
+                    break
+                    
+            if future_idx < len(self.global_path) - 1:
+                future_yaw = math.atan2(self.global_path[future_idx+1, 1] - self.global_path[future_idx, 1],
+                                        self.global_path[future_idx+1, 0] - self.global_path[future_idx, 0])
+            else:
+                future_yaw = path_yaw
+                
+            yaw_diff = abs(math.atan2(math.sin(future_yaw - ryaw), math.cos(future_yaw - ryaw)))
+            speed_factor = max(0.0, 1.0 - (yaw_diff / 0.6))
+            target_vel = min_v + speed_factor * (max_v - min_v)
+
+        accel = self.get_parameter('max_acceleration').value
+        decel = self.get_parameter('max_deceleration').value
         
-        self.U_a += np.sum(weights[:, None] * noise_a, axis=0)
-        self.U_s += np.sum(weights[:, None] * noise_s, axis=0)
-        
-        self.U_a = np.clip(self.U_a, -d_max, a_max)
-        self.U_s = np.clip(self.U_s, -s_max, s_max)
-        
-        # Extract first control action (receding horizon)
-        cmd_a = self.U_a[0]
-        cmd_s = self.U_s[0]
-        
-        # Shift nominal sequence forward
-        self.U_a[:-1] = self.U_a[1:]
-        self.U_a[-1] = 0.3  # Small forward bias to prevent stalling
-        self.U_s[:-1] = self.U_s[1:]
-        self.U_s[-1] = 0.0
-        
-        # Convert to Twist command
-        cmd_v = float(np.clip(max(self.current_vel, 0.0) + cmd_a * dt, 0.0, v_max))
-        
-        # Publish TwistStamped → /cmd_vel_raw → AEB pipeline
-        # IMPORTANT: angular.z = steering angle directly (NOT angular velocity)
+        if target_vel > self.cmd_v_prev:
+            self.cmd_v_prev = min(target_vel, self.cmd_v_prev + accel * self.dt)
+        else:
+            self.cmd_v_prev = max(target_vel, self.cmd_v_prev - decel * self.dt)
+            
+        cmd_v = self.cmd_v_prev
+
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
-        msg.twist.linear.x = cmd_v
-        msg.twist.angular.z = float(cmd_s)
+        msg.twist.linear.x = float(cmd_v)
+        msg.twist.angular.z = steer_angle
         self.cmd_pub.publish(msg)
-        
+
         comp_time = (time.perf_counter() - t0) * 1000.0
-        actual_freq = 1000.0 / comp_time if comp_time > 0 else 0
         self.get_logger().info(
-            f"MPPI: {comp_time:.1f}ms | {actual_freq:.0f}Hz | "
-            f"v={cmd_v:.2f} steer={cmd_s:.3f} a={cmd_a:.2f} | "
-            f"Col:{num_collisions}/{N}"
+            f"STANLEY | D2G:{dist_to_goal:.2f}m | tgt:{target_vel:.2f} vel:{cmd_v:.2f} str:{steer_angle:.2f}"
         )
 
 def main(args=None):
