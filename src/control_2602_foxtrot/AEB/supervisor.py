@@ -16,8 +16,8 @@ class ModeSupervisor(Node):
         self.get_logger().info("Supervisor: Spoofing Joy activado. Kill switch anulado. Navegación autónoma libre.")
 
     def publish_states(self):
-        self.aeb_pub.publish(Bool(data=False))
-        self.wf_pub.publish(Bool(data=False)) # REVERT: Desactivar wall_follower para que A*/Stanley tome el control
+        self.aeb_pub.publish(Bool(data=True))   # AEB MUST be ON for crash protection
+        self.wf_pub.publish(Bool(data=False))
         self.ftg_pub.publish(Bool(data=False))
 
 def main(args=None):

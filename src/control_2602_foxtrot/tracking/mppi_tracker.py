@@ -5,6 +5,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Path, Odometry
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Int32
 from tf2_ros import Buffer, TransformListener
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 import numpy as np
@@ -16,19 +17,17 @@ class MPPITracker(Node):
         super().__init__('mppi_tracker') 
         
         # =======================================================
-        # DINÁMICA STANLEY (Parámetros Mecánicos de Precisión)
-        # =======================================================
         self.declare_parameter('control_frequency', 50.0) 
         self.declare_parameter('wheelbase', 0.42)          
         self.declare_parameter('max_steering_angle', 2.0)  
         
-        self.declare_parameter('max_velocity', 8.0)       # FULL SEND F1 MODE
-        self.declare_parameter('min_velocity', 3.0)        # Never crawl
-        self.declare_parameter('max_acceleration', 5.0)   # Aggressive launch
-        self.declare_parameter('max_deceleration', 8.0)   # Hard braking for corners
+        self.declare_parameter('max_velocity', 10.5)
+        self.declare_parameter('min_velocity', 3.4)
+        self.declare_parameter('max_acceleration', 8.0)
+        self.declare_parameter('max_deceleration', 10.0)
         
-        self.declare_parameter('k_stanley', 4.0)           # Tuned for high-speed stability
-        self.declare_parameter('k_soft', 1.0)              # Reducido para que responda rápido a velocidades bajas
+        self.declare_parameter('k_stanley', 6.0)
+        self.declare_parameter('k_soft', 1.0)# Reducido para que responda rápido a velocidades bajas
         
         self.declare_parameter('repulsion_radius', 1.0)   
         self.declare_parameter('repulsion_gain', 1.7)      
@@ -36,14 +35,18 @@ class MPPITracker(Node):
         self.path_sub = self.create_subscription(Path, '/plan', self.path_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/ekf/odometry', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, rclpy.qos.qos_profile_sensor_data)
+        self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
         self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel_raw', 10)
-        
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        
+
         self.global_path = None
         self.current_vel = 0.0
-        self.cmd_v_prev = 0.0 
+        self.cmd_v_prev = 0.0
+        
+        self.laps_remaining = 0
+        self.prev_closest_idx = 0 
         
         self.closest_obstacle_dist = 999.0
         self.closest_obstacle_angle = 0.0
@@ -53,10 +56,27 @@ class MPPITracker(Node):
         
         self.get_logger().info("Controlador STANLEY en línea. Freno Ortogonal (Anti-Orbiting) activado.")
 
+    def laps_callback(self, msg):
+        self.laps_remaining = msg.data
+        if self.laps_remaining > 0:
+            self.get_logger().info(f"Modo Carrera F1 Activado: {self.laps_remaining} vueltas restantes.")
+
     def path_callback(self, msg):
         if len(msg.poses) < 2:
             return
-        self.global_path = np.array([[p.pose.position.x, p.pose.position.y] for p in msg.poses])
+        path = [[p.pose.position.x, p.pose.position.y] for p in msg.poses]
+        
+        # If the path is a loop (or almost closed), connect the ends to make it perfectly cyclic!
+        dist_end_to_start = math.hypot(path[-1][0] - path[0][0], path[-1][1] - path[0][1])
+        if dist_end_to_start < 5.0 and dist_end_to_start > 0.1:
+            num_interp = int(dist_end_to_start / 0.05)
+            for i in range(1, num_interp):
+                t = i / num_interp
+                nx = path[-1][0] * (1 - t) + path[0][0] * t
+                ny = path[-1][1] * (1 - t) + path[0][1] * t
+                path.append([nx, ny])
+                
+        self.global_path = np.array(path)
 
     def odom_callback(self, msg):
         self.current_vel = msg.twist.twist.linear.x
@@ -64,7 +84,7 @@ class MPPITracker(Node):
     def scan_callback(self, msg):
         ranges = np.array(msg.ranges)
         angles = msg.angle_min + np.arange(len(ranges)) * msg.angle_increment
-        min_range = 0.15
+        min_range = 0.4 # Ignora el chasis del robot
         
         valid = (ranges >= min_range) & (ranges < 5.0) & np.isfinite(ranges)
         if np.any(valid):
@@ -118,38 +138,55 @@ class MPPITracker(Node):
         fy = ry + L * math.sin(ryaw)
 
         dists = np.hypot(self.global_path[:, 0] - fx, self.global_path[:, 1] - fy)
-        closest_idx = int(np.argmin(dists))
         
-        if closest_idx >= len(self.global_path) - 1:
-            closest_idx = len(self.global_path) - 2
+        # Local search to prevent jumping across the loop
+        if self.prev_closest_idx > 0 and len(self.global_path) > 100:
+            search_indices = [(self.prev_closest_idx + i) % len(self.global_path) for i in range(-20, 50)]
+            local_dists = dists[search_indices]
+            min_local_idx = int(np.argmin(local_dists))
+            closest_idx = search_indices[min_local_idx]
+        else:
+            closest_idx = int(np.argmin(dists))
+        
+        # Lap detection: if we jump from end of path to beginning of path
+        if closest_idx < 50 and self.prev_closest_idx > len(self.global_path) - 50:
+            if self.laps_remaining > 0:
+                self.laps_remaining -= 1
+                self.get_logger().info(f"Vuelta completada! Faltan {self.laps_remaining} vueltas.")
+                
+        self.prev_closest_idx = closest_idx
             
         goal_x = self.global_path[-1, 0]
         goal_y = self.global_path[-1, 1]
         dist_to_goal = math.hypot(goal_x - fx, goal_y - fy)
         
         # =======================================================
-        # FRENO ORTOGONAL (Evitar el bucle de "Goal Orbiting")
+        # FRENO ORTOGONAL & LAPS LOGIC
         # =======================================================
-        # Calcular si la meta ha quedado detrás del morro del vehículo
         dx_goal = goal_x - fx
         dy_goal = goal_y - fy
         dot_product = dx_goal * math.cos(ryaw) + dy_goal * math.sin(ryaw)
         passed_goal = (dot_product < 0.0) and (dist_to_goal < 1.0)
         
-        # Condición de ancla extendida (0.4m) o superación física de la meta
-        if dist_to_goal < 0.4 or closest_idx >= len(self.global_path) - 2 or passed_goal:
-            self.stop_vehicle()
-            if passed_goal:
-                self.get_logger().info("Meta superada. Anclaje de emergencia activado.", throttle_duration_sec=2.0)
-            else:
-                self.get_logger().info("Estacionamiento preciso completado.", throttle_duration_sec=2.0)
-            return
+        # Only stop if we are on the FINAL lap!
+        if self.laps_remaining <= 0:
+            if dist_to_goal < 0.35 or passed_goal:
+                self.stop_vehicle()
+                if passed_goal:
+                    self.get_logger().info("Meta superada. Anclaje de emergencia activado.", throttle_duration_sec=2.0)
+                else:
+                    self.get_logger().info("Carrera Finalizada. Estacionamiento preciso completado.", throttle_duration_sec=2.0)
+                return
+        else:
+            # If we are doing laps, override the distance to goal so it NEVER brakes!
+            dist_to_goal = 999.0
             
+        # Circular next point for steering
+        next_idx = (closest_idx + 1) % len(self.global_path)
         px = self.global_path[closest_idx, 0]
         py = self.global_path[closest_idx, 1]
-        
-        px_next = self.global_path[closest_idx + 1, 0]
-        py_next = self.global_path[closest_idx + 1, 1]
+        px_next = self.global_path[next_idx, 0]
+        py_next = self.global_path[next_idx, 1]
         
         path_yaw = math.atan2(py_next - py, px_next - px)
         
@@ -184,26 +221,33 @@ class MPPITracker(Node):
         # PERFILADO DE VELOCIDAD DE ARRASTRE (Creep Velocity)
         # =======================================================
         max_v = self.get_parameter('max_velocity').value
-        min_v = self.get_parameter('min_velocity').value
+        min_v = 2.5 # Reduced from 3.4 so it takes sharp corners safely without slipping
         creep_v = 0.6 
-        # 2. MODULACIÓN DE VELOCIDAD (Frenado en curvas)
+        
+        lookahead_dist = max(6.0, max_v * 0.7) # Look ahead further at high speeds
+        
+        # 2. MODULACIÓN DE VELOCIDAD (Frenado en curvas circulares)
         if dist_to_goal < 4.0:
             target_vel = max(creep_v, min_v * (dist_to_goal / 4.0))
         else:
             future_idx = closest_idx
-            for i in range(closest_idx, len(self.global_path)):
-                if math.hypot(self.global_path[i, 0] - fx, self.global_path[i, 1] - fy) > 6.0:
-                    future_idx = i
+            dist_accum = 0.0
+            for i in range(1, int(lookahead_dist / 0.05) + 50):
+                idx1 = (closest_idx + i - 1) % len(self.global_path)
+                idx2 = (closest_idx + i) % len(self.global_path)
+                dist_accum += math.hypot(self.global_path[idx2, 0] - self.global_path[idx1, 0], 
+                                         self.global_path[idx2, 1] - self.global_path[idx1, 1])
+                if dist_accum > lookahead_dist:
+                    future_idx = idx2
                     break
                     
-            if future_idx < len(self.global_path) - 1:
-                future_yaw = math.atan2(self.global_path[future_idx+1, 1] - self.global_path[future_idx, 1],
-                                        self.global_path[future_idx+1, 0] - self.global_path[future_idx, 0])
-            else:
-                future_yaw = path_yaw
+            future_next = (future_idx + 1) % len(self.global_path)
+            future_yaw = math.atan2(self.global_path[future_next, 1] - self.global_path[future_idx, 1],
+                                    self.global_path[future_next, 0] - self.global_path[future_idx, 0])
                 
             yaw_diff = abs(math.atan2(math.sin(future_yaw - ryaw), math.cos(future_yaw - ryaw)))
-            speed_factor = max(0.0, 1.0 - (yaw_diff / 0.6))
+            # Brake harder and earlier for curves (0.35 rad diff ~20 deg will brake to min_v)
+            speed_factor = max(0.0, 1.0 - (yaw_diff / 0.35))
             target_vel = min_v + speed_factor * (max_v - min_v)
 
         accel = self.get_parameter('max_acceleration').value

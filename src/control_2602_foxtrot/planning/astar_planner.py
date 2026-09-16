@@ -17,7 +17,7 @@ class AStarPlanner(Node):
         super().__init__('astar_planner')
         
         # Parameters
-        self.declare_parameter('inflation_radius_m', 0.35)
+        self.declare_parameter('inflation_radius_m', 0.45)
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
         
@@ -29,6 +29,8 @@ class AStarPlanner(Node):
         
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
         self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_callback, 10)
+        from std_msgs.msg import Int32
+        self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
         self.path_pub = self.create_publisher(Path, '/plan', 10) # Keeping /plan as it matches RViz config
         
         self.tf_buffer = Buffer()
@@ -59,6 +61,27 @@ class AStarPlanner(Node):
         
         self.inflated_grid = np.where(inflated_mask, 100, 0)
         
+        # F1 MODE: Break the track loop with a virtual wall BEHIND the start line
+        # Map frame is rotated ~180° from Gazebo. Robot at map (-0.026, -0.581) faces -X.
+        # "Behind" the robot (backward direction) is +X in map frame.
+        # Wall blocks the backward shortcut so A* must plan forward around the full loop.
+        f1_mode = True
+        if f1_mode:
+            wall_x_m = 1.5    # +X = behind the robot in map frame
+            wall_y_m = -0.6   # Same Y as the robot's start position
+            wall_radius_m = 0.8
+            
+            w_gx = int((wall_x_m - msg.info.origin.position.x) / msg.info.resolution)
+            w_gy = int((wall_y_m - msg.info.origin.position.y) / msg.info.resolution)
+            w_r = int(wall_radius_m / msg.info.resolution)
+            
+            for y in range(max(0, w_gy - w_r), min(msg.info.height, w_gy + w_r)):
+                for x in range(max(0, w_gx - w_r), min(msg.info.width, w_gx + w_r)):
+                    if (x - w_gx)**2 + (y - w_gy)**2 <= w_r**2:
+                        self.inflated_grid[y, x] = 100
+            
+            self.get_logger().info(f"F1 Virtual Wall placed at map ({wall_x_m}, {wall_y_m}), radius {wall_radius_m}m, grid ({w_gx}, {w_gy})")
+        
         # Downsample preserving obstacles (Max Pooling)
         self.downsample_factor = self.get_parameter('downsample_factor').value
         if self.downsample_factor > 1:
@@ -72,6 +95,20 @@ class AStarPlanner(Node):
             self.small_grid = self.inflated_grid
             
         self.get_logger().info(f"Map processed: inflated by {inflation_cells} cells ({inflation_radius_m}m), downsampled by {self.downsample_factor}")
+
+    def laps_callback(self, msg):
+        self.get_logger().info(f"Received Laps Command: {msg.data}. Setting goal behind virtual wall.")
+        goal = PoseStamped()
+        goal.header.stamp = self.get_clock().now().to_msg()
+        goal.header.frame_id = 'map'
+        # Goal at map (+2.5, -0.6): behind the virtual wall at (+1.5, -0.6)
+        # The robot at (-0.026, -0.581) must go FORWARD (-X) around the entire loop
+        # to reach this point from the other direction.
+        goal.pose.position.x = 2.5
+        goal.pose.position.y = -0.6
+        goal.pose.orientation.w = 1.0
+        self.current_goal = goal
+        self.plan_path()
 
     def goal_callback(self, msg):
         self.current_goal = msg

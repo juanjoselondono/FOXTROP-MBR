@@ -46,7 +46,7 @@ class KinematicAEBFilter(Node):
         msg = self.latest_scan
         
         for i, r in enumerate(msg.ranges):
-            if math.isinf(r) or math.isnan(r) or r < 0.4: 
+            if math.isinf(r) or math.isnan(r) or r < 0.4:
                 continue
                 
             angle = msg.angle_min + (i * msg.angle_increment)
