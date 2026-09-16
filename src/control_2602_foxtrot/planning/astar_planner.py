@@ -22,19 +22,9 @@ class AStarPlanner(Node):
         self.declare_parameter('inflation_radius_m', 0.40)
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
-        self.declare_parameter('goal_x', 2.5)
-        self.declare_parameter('goal_y', -0.6)
         
-        # Radio estricto: Obliga al robot a terminar la curva antes de solicitar la siguiente ruta.
-        # Combinado con el temporizador a 20Hz, elimina el stutter sin cortar la pista.
-        self.declare_parameter('wp_transition_radius_m', 2.2) 
-
-        self.race_mode = False
-        self.race_waypoints = [
-            (-15.3759, 4.45454),
-            (-0.441745, -0.787758)
-        ]
-        self.current_wp_idx = 0
+        # NUEVO PARÁMETRO: Multiplicador agresivo para Weighted A* (reduce drásticamente los tiempos de cálculo)
+        self.declare_parameter('heuristic_weight', 2.5) 
 
         qos = QoSProfile(
             depth=1, 
@@ -45,8 +35,9 @@ class AStarPlanner(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
         self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_callback, 10)
         self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
-        self.lap_comp_sub = self.create_subscription(Empty, '/lap_completed', self.lap_completed_callback, 10)
+        
         self.path_pub = self.create_publisher(Path, '/plan', 10)
+        self.lap_comp_pub = self.create_publisher(Empty, '/lap_completed', 10) 
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -55,17 +46,27 @@ class AStarPlanner(Node):
         self.inflated_grid = None
         self.small_grid = None
         self.map_info = None
-        
-        # Bucle de alta frecuencia (20 Hz) para reactividad instantánea sin retrasos (polling delay)
-        self.timer = self.create_timer(0.05, self.plan_timer_callback)
-        self.current_goal = None
+
+        self.dynamic_wall = None
+
+        # Máquina de Estados y Telemetría
+        self.pending_race_laps = 0
+        self.race_active = False
+        self.laps_remaining = 0
+        self.start_pose = None
+        self.finish_line_normal = None
+        self.lap_state = "IDLE"
+
+        # Reloj central del sistema (20 Hz)
+        self.system_tick_timer = self.create_timer(0.05, self.system_tick_callback)
+
+        self.get_logger().info("Planificador Maestro Topológico Inicializado. A* Ponderado y micro-optimizaciones en línea.")
 
     def map_callback(self, msg):
         self.map_info = msg.info
         raw_grid = np.array(msg.data).reshape((msg.info.height, msg.info.width))
         
         processed_grid = np.where(raw_grid == -1, 100, raw_grid)
-        
         obstacle_mask = processed_grid > 50
         distances = distance_transform_edt(~obstacle_mask) * msg.info.resolution
         
@@ -80,8 +81,8 @@ class AStarPlanner(Node):
         costmap[soft_mask] = 49.0 * ratio
         
         self.inflated_grid = costmap.astype(np.int32)
-        
         self.downsample_factor = self.get_parameter('downsample_factor').value
+        
         if self.downsample_factor > 1:
             h, w = self.inflated_grid.shape
             k = self.downsample_factor
@@ -92,70 +93,180 @@ class AStarPlanner(Node):
         else:
             self.small_grid = self.inflated_grid
             
-        self.get_logger().info(f"Map processed: continuous costmap generated, downsampled by {self.downsample_factor}")
+        self.get_logger().info(f"Mapa estático procesado y en caché.")
 
     def goal_callback(self, msg):
-        self.get_logger().info("Received Manual Navigation Goal from RViz")
+        self.get_logger().info("Calculando trayectoria manual...")
+        rx, ry, ryaw = self.get_robot_pose()
+        if rx is None:
+            self.get_logger().warn("Odometría no disponible.")
+            return
+            
         self.dynamic_wall = None
-        self.current_goal = msg
-        self.plan_path()
-
-    def plan_timer_callback(self):
-        if not self.race_mode:
-            return
-            
-        rx, ry, _ = self.get_robot_pose()
-        if rx is None or self.current_goal is None:
-            return
-            
-        goal_x = self.current_goal.pose.position.x
-        goal_y = self.current_goal.pose.position.y
-        dist = math.hypot(goal_x - rx, goal_y - ry)
+        goal_w = (msg.pose.position.x, msg.pose.position.y)
+        raw_path = self.calculate_segment((rx, ry), goal_w)
         
-        transition_radius = self.get_parameter('wp_transition_radius_m').value
-        
-        # Transición limpia: solo avanza al estar verdaderamente sobre el objetivo.
-        if dist < transition_radius:
-            self.advance_waypoint()
-
-    def advance_waypoint(self):
-        rx, ry, _ = self.get_robot_pose()
-        if rx is None: return
-        
-        goal_x, goal_y = self.race_waypoints[self.current_wp_idx]
-        
-        goal = PoseStamped()
-        goal.header.frame_id = 'map'
-        goal.pose.position.x = float(goal_x)
-        goal.pose.position.y = float(goal_y)
-        goal.pose.orientation.w = 1.0
-        self.current_goal = goal
-        
-        self.get_logger().info(f"F1 Mode: En route to Waypoint {self.current_wp_idx + 1}/2 ({goal_x:.2f}, {goal_y:.2f}). Laps left: {self.laps_remaining}")
-        
-        self.current_wp_idx += 1
-        if self.current_wp_idx >= len(self.race_waypoints):
-            self.current_wp_idx = 0
-            self.laps_remaining -= 1
-            if self.laps_remaining < 0:
-                self.race_mode = False
-                self.get_logger().info("Race Finished!")
-                return
-                
-        self.plan_path()
+        if raw_path:
+            processed = self.post_process_path(raw_path)
+            self.publish_path(processed)
 
     def laps_callback(self, msg):
-        self.laps_remaining = msg.data
-        if self.laps_remaining <= 0:
-            self.race_mode = False
+        laps = msg.data
+        if laps <= 0:
+            self.pending_race_laps = 0
+            self.race_active = False
             return
             
-        self.race_mode = True
-        self.current_wp_idx = 0
-        self.advance_waypoint()
+        self.pending_race_laps = laps
+        self.get_logger().info(f"Comando F1 recibido: {laps} vueltas. Sincronizando sensores...")
 
-    def lap_completed_callback(self, msg):
-        self.get_logger().info("Señal de vuelta completada registrada en el sistema de telemetría.")
+    def system_tick_callback(self):
+        if self.pending_race_laps > 0 and not self.race_active:
+            self.try_compile_race()
+
+        if self.race_active:
+            self.process_telemetry()
+
+    def try_compile_race(self):
+        if self.small_grid is None:
+            return 
+            
+        rx, ry, ryaw = self.get_robot_pose()
+        if rx is None:
+            return 
+            
+        self.get_logger().info("Sistemas de Navegación Online. Evaluando entorno seguro...")
+        t0 = time.perf_counter()
+
+        gx, gy = None, None
+        for dist in np.arange(2.0, 7.0, 0.2): 
+            tx = rx - dist * math.cos(ryaw)
+            ty = ry - dist * math.sin(ryaw)
+            mx, my = self.world_to_small_map(tx, ty)
+            
+            if mx is not None and 0 <= mx < self.small_grid.shape[1] and 0 <= my < self.small_grid.shape[0]:
+                if self.small_grid[my, mx] < 50: 
+                    gx, gy = tx, ty
+                    break
+
+        if gx is None:
+            self.get_logger().error("Error Crítico: No hay asfalto libre detrás del robot. Ubique el chasis en un área despejada.")
+            self.pending_race_laps = 0
+            return
+
+        dist_found = math.hypot(gx - rx, gy - ry)
+        self.get_logger().info(f"Punto de cierre asimilado a {dist_found:.1f}m. Procesando topología mediante A* Ponderado...")
+
+        self.dynamic_wall = (rx, ry, ryaw)
+        path_one_lap = self.calculate_segment((rx, ry), (gx, gy))
+        self.dynamic_wall = None
+
+        if not path_one_lap:
+            self.get_logger().error("Imposible resolver la pista. Asegúrese de que el circuito sea un anillo continuo y no tenga bloqueos físicos.")
+            self.pending_race_laps = 0
+            return
+
+        path_one_lap.append((rx, ry))
+
+        full_trajectory = []
+        for i in range(self.pending_race_laps):
+            if i == 0:
+                full_trajectory.extend(path_one_lap)
+            else:
+                full_trajectory.extend(path_one_lap[1:])
+
+        planning_time_ms = (time.perf_counter() - t0) * 1000.0
+
+        if full_trajectory:
+            processed_path = self.post_process_path(full_trajectory)
+            self.publish_path(processed_path)
+            self.get_logger().info(f"ÉXITO: Pista completa asimilada en {planning_time_ms/1000.0:.2f} segundos.")
+            
+            self.start_pose = (rx, ry)
+            self.finish_line_normal = (math.cos(ryaw), math.sin(ryaw)) 
+            self.laps_remaining = self.pending_race_laps
+            
+            self.pending_race_laps = 0
+            self.race_active = True
+            self.lap_state = "JUST_CROSSED" 
+            
+            self.get_logger().info("Telemetría en línea. Controlador MPPI asume autoridad de vuelo. Planificador inactivo.")
+
+    def process_telemetry(self):
+        rx, ry, _ = self.get_robot_pose()
+        if rx is None:
+            return
+
+        dist = math.hypot(rx - self.start_pose[0], ry - self.start_pose[1])
+        dx = rx - self.start_pose[0]
+        dy = ry - self.start_pose[1]
+        proj = dx * self.finish_line_normal[0] + dy * self.finish_line_normal[1]
+
+        if self.lap_state == "JUST_CROSSED":
+            if dist > 5.0:
+                self.lap_state = "ARMED"
+                self.get_logger().info("Sensor de Meta ARMADO. Esperando intersección de plano...")
+                
+        elif self.lap_state == "ARMED":
+            if dist < 4.0 and proj > 0.0:
+                self.laps_remaining -= 1
+                self.lap_state = "JUST_CROSSED"
+                
+                self.get_logger().info(f"🏁 ¡VUELTA REGISTRADA! Restan: {self.laps_remaining} vueltas")
+                
+                msg = Empty()
+                self.lap_comp_pub.publish(msg)
+
+                if self.laps_remaining <= 0:
+                    self.get_logger().info("🏆 ¡MISIÓN FINALIZADA! Sistema entra en reposo absoluto.")
+                    self.race_active = False
+
+    def calculate_segment(self, start_world, goal_world):
+        start = self.world_to_small_map(start_world[0], start_world[1])
+        goal = self.world_to_small_map(goal_world[0], goal_world[1])
+
+        if start[0] is None or goal[0] is None:
+            return None
+
+        open_set = []
+        heapq.heappush(open_set, (0.0, start))
+        came_from = {}
+        g_score = {start: 0.0}
+        
+        found = False
+        
+        # Recuperar el peso de la heurística
+        h_weight = self.get_parameter('heuristic_weight').value
+
+        while open_set:
+            current_f, current = heapq.heappop(open_set)
+            
+            if current == goal:
+                found = True
+                break
+                
+            for neighbor, step_cost in self.get_neighbors(current):
+                penalty = self.small_grid[neighbor[1], neighbor[0]] * 0.1
+                tentative_g_score = g_score[current] + step_cost + penalty
+                
+                if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g_score
+                    # Implementación de Weighted A* para aceleración extrema
+                    f_score = tentative_g_score + (h_weight * self.octile_distance(neighbor, goal))
+                    heapq.heappush(open_set, (f_score, neighbor))
+                    
+        if found:
+            raw_path = []
+            curr = goal
+            while curr in came_from:
+                raw_path.append(curr)
+                curr = came_from[curr]
+            raw_path.append(start)
+            raw_path.reverse()
+            return [self.small_map_to_world(p[0], p[1]) for p in raw_path]
+            
+        return None
 
     def get_robot_pose(self):
         try:
@@ -187,16 +298,16 @@ class AStarPlanner(Node):
         if self.small_grid[y, x] >= 50:
             return False
             
-        if hasattr(self, 'dynamic_wall') and self.dynamic_wall is not None:
+        if self.dynamic_wall is not None:
             rx, ry, ryaw = self.dynamic_wall
             wx, wy = self.small_map_to_world(x, y)
             
             dx = wx - rx
             dy = wy - ry
-            local_x = dx * math.cos(-ryaw) - dy * math.sin(-ryaw)
-            local_y = dx * math.sin(-ryaw) + dy * math.cos(-ryaw)
+            local_x = dx * math.cos(ryaw) + dy * math.sin(ryaw)
+            local_y = -dx * math.sin(ryaw) + dy * math.cos(ryaw)
             
-            if -2.5 <= local_x <= -0.5 and -0.8 <= local_y <= 0.8:
+            if -1.8 <= local_x <= -0.5 and -3.5 <= local_y <= 3.5:
                 return False
                 
         return True
@@ -204,90 +315,25 @@ class AStarPlanner(Node):
     def get_neighbors(self, node):
         x, y = node
         neighbors = []
-        directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        # Micro-optimización: Precalcular costos evita ejecutar math.sqrt miles de veces por segundo.
+        directions = [
+            (0, 1, 1.0), (1, 0, 1.0), (0, -1, 1.0), (-1, 0, 1.0), 
+            (1, 1, 1.4142), (1, -1, 1.4142), (-1, 1, 1.4142), (-1, -1, 1.4142)
+        ]
         
-        for dx, dy in directions:
+        for dx, dy, cost in directions:
             nx, ny = x + dx, y + dy
             if self.is_valid_small(nx, ny):
                 if dx != 0 and dy != 0:
                     if not self.is_valid_small(x + dx, y) or not self.is_valid_small(x, y + dy):
                         continue
-                neighbors.append((nx, ny))
+                neighbors.append(((nx, ny), cost))
         return neighbors
 
     def octile_distance(self, a, b):
         dx = abs(a[0] - b[0])
         dy = abs(a[1] - b[1])
         return max(dx, dy) + (math.sqrt(2) - 1) * min(dx, dy)
-
-    def plan_path(self):
-        if self.small_grid is None or self.current_goal is None:
-            return
-
-        rx, ry, ryaw = self.get_robot_pose()
-        if rx is None:
-            return
-            
-        if getattr(self, 'race_mode', False):
-            self.dynamic_wall = (rx, ry, ryaw)
-        
-        start = self.world_to_small_map(rx, ry)
-        goal = self.world_to_small_map(self.current_goal.pose.position.x, self.current_goal.pose.position.y)
-
-        if start[0] is None or goal[0] is None:
-            return
-
-        t0 = time.perf_counter()
-        open_set = []
-        heapq.heappush(open_set, (0.0, start))
-        came_from = {}
-        g_score = {start: 0.0}
-        
-        expanded_nodes = 0
-        found = False
-
-        while open_set:
-            current_f, current = heapq.heappop(open_set)
-            expanded_nodes += 1
-            
-            if current == goal:
-                found = True
-                break
-                
-            for neighbor in self.get_neighbors(current):
-                step_cost = math.sqrt((current[0]-neighbor[0])**2 + (current[1]-neighbor[1])**2)
-                
-                penalty = self.small_grid[neighbor[1], neighbor[0]] * 0.1
-                
-                tentative_g_score = g_score[current] + step_cost + penalty
-                
-                if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = tentative_g_score
-                    f_score = tentative_g_score + self.octile_distance(neighbor, goal)
-                    heapq.heappush(open_set, (f_score, neighbor))
-                    
-        planning_time_ms = (time.perf_counter() - t0) * 1000.0
-
-        if found:
-            raw_path = []
-            curr = goal
-            while curr in came_from:
-                raw_path.append(curr)
-                curr = came_from[curr]
-            raw_path.append(start)
-            raw_path.reverse()
-            
-            world_path = [self.small_map_to_world(p[0], p[1]) for p in raw_path]
-            processed_path = self.post_process_path(world_path)
-            
-            path_length_m = sum(math.hypot(processed_path[i][0]-processed_path[i-1][0], 
-                                           processed_path[i][1]-processed_path[i-1][1]) for i in range(1, len(processed_path)))
-            
-            self.get_logger().info(f"A* Success | Time: {planning_time_ms:.2f} ms | Nodes: {expanded_nodes} | Length: {path_length_m:.2f} m | Waypoints: {len(processed_path)}")
-            self.publish_path(processed_path)
-        else:
-            self.get_logger().warn(f"A* Failed | Time: {planning_time_ms:.2f} ms | Nodes: {expanded_nodes}")
 
     def post_process_path(self, path):
         if len(path) < 3:
