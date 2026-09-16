@@ -22,9 +22,6 @@ class AStarPlanner(Node):
         self.declare_parameter('inflation_radius_m', 0.40)
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
-        
-        # NUEVO PARÁMETRO: Multiplicador agresivo para Weighted A* (reduce drásticamente los tiempos de cálculo)
-        self.declare_parameter('heuristic_weight', 2.5) 
 
         qos = QoSProfile(
             depth=1, 
@@ -60,7 +57,7 @@ class AStarPlanner(Node):
         # Reloj central del sistema (20 Hz)
         self.system_tick_timer = self.create_timer(0.05, self.system_tick_callback)
 
-        self.get_logger().info("Planificador Maestro Topológico Inicializado. A* Ponderado y micro-optimizaciones en línea.")
+        self.get_logger().info("Planificador Maestro Topológico Inicializado. Escáner adaptativo en línea.")
 
     def map_callback(self, msg):
         self.map_info = msg.info
@@ -128,6 +125,7 @@ class AStarPlanner(Node):
             self.process_telemetry()
 
     def try_compile_race(self):
+        """ Compila la carrera garantizando un punto objetivo válido """
         if self.small_grid is None:
             return 
             
@@ -138,14 +136,15 @@ class AStarPlanner(Node):
         self.get_logger().info("Sistemas de Navegación Online. Evaluando entorno seguro...")
         t0 = time.perf_counter()
 
+        # 1. Buscador Adaptativo: Escanear hacia atrás hasta encontrar un punto libre (fuera de muros)
         gx, gy = None, None
-        for dist in np.arange(2.0, 7.0, 0.2): 
+        for dist in np.arange(2.0, 7.0, 0.2): # Escanea desde 2m hasta 7m hacia atrás
             tx = rx - dist * math.cos(ryaw)
             ty = ry - dist * math.sin(ryaw)
             mx, my = self.world_to_small_map(tx, ty)
             
             if mx is not None and 0 <= mx < self.small_grid.shape[1] and 0 <= my < self.small_grid.shape[0]:
-                if self.small_grid[my, mx] < 50: 
+                if self.small_grid[my, mx] < 50: # Es un área libre
                     gx, gy = tx, ty
                     break
 
@@ -155,10 +154,15 @@ class AStarPlanner(Node):
             return
 
         dist_found = math.hypot(gx - rx, gy - ry)
-        self.get_logger().info(f"Punto de cierre asimilado a {dist_found:.1f}m. Procesando topología mediante A* Ponderado...")
+        self.get_logger().info(f"Punto de cierre asimilado a {dist_found:.1f}m detrás del chasis. Procesando topología masiva (esto tomará un momento)...")
 
+        # 2. Instalar el muro de contención dinámico (Caja Matemática)
         self.dynamic_wall = (rx, ry, ryaw)
+
+        # 3. Calcular la vuelta completa (forzado a avanzar)
         path_one_lap = self.calculate_segment((rx, ry), (gx, gy))
+
+        # 4. Desmantelar la caja de seguridad
         self.dynamic_wall = None
 
         if not path_one_lap:
@@ -166,8 +170,10 @@ class AStarPlanner(Node):
             self.pending_race_laps = 0
             return
 
+        # 5. Coser las coordenadas
         path_one_lap.append((rx, ry))
 
+        # 6. Multiplicar vueltas
         full_trajectory = []
         for i in range(self.pending_race_laps):
             if i == 0:
@@ -182,6 +188,7 @@ class AStarPlanner(Node):
             self.publish_path(processed_path)
             self.get_logger().info(f"ÉXITO: Pista completa asimilada en {planning_time_ms/1000.0:.2f} segundos.")
             
+            # 7. Levantar Línea de Meta para Telemetría
             self.start_pose = (rx, ry)
             self.finish_line_normal = (math.cos(ryaw), math.sin(ryaw)) 
             self.laps_remaining = self.pending_race_laps
@@ -234,9 +241,6 @@ class AStarPlanner(Node):
         g_score = {start: 0.0}
         
         found = False
-        
-        # Recuperar el peso de la heurística
-        h_weight = self.get_parameter('heuristic_weight').value
 
         while open_set:
             current_f, current = heapq.heappop(open_set)
@@ -245,15 +249,15 @@ class AStarPlanner(Node):
                 found = True
                 break
                 
-            for neighbor, step_cost in self.get_neighbors(current):
+            for neighbor in self.get_neighbors(current):
+                step_cost = math.sqrt((current[0]-neighbor[0])**2 + (current[1]-neighbor[1])**2)
                 penalty = self.small_grid[neighbor[1], neighbor[0]] * 0.1
                 tentative_g_score = g_score[current] + step_cost + penalty
                 
                 if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g_score
-                    # Implementación de Weighted A* para aceleración extrema
-                    f_score = tentative_g_score + (h_weight * self.octile_distance(neighbor, goal))
+                    f_score = tentative_g_score + self.octile_distance(neighbor, goal)
                     heapq.heappush(open_set, (f_score, neighbor))
                     
         if found:
@@ -302,11 +306,15 @@ class AStarPlanner(Node):
             rx, ry, ryaw = self.dynamic_wall
             wx, wy = self.small_map_to_world(x, y)
             
+            # Transformación perfecta a coordenadas cinemáticas locales del robot
             dx = wx - rx
             dy = wy - ry
             local_x = dx * math.cos(ryaw) + dy * math.sin(ryaw)
             local_y = -dx * math.sin(ryaw) + dy * math.cos(ryaw)
             
+            # Caja Geométrica de Contención: 
+            # -1.8m a -0.5m detrás del eje, y 7m de ancho total (±3.5m)
+            # Absolutamente sin sangrado hacia curvas paralelas
             if -1.8 <= local_x <= -0.5 and -3.5 <= local_y <= 3.5:
                 return False
                 
@@ -315,19 +323,15 @@ class AStarPlanner(Node):
     def get_neighbors(self, node):
         x, y = node
         neighbors = []
-        # Micro-optimización: Precalcular costos evita ejecutar math.sqrt miles de veces por segundo.
-        directions = [
-            (0, 1, 1.0), (1, 0, 1.0), (0, -1, 1.0), (-1, 0, 1.0), 
-            (1, 1, 1.4142), (1, -1, 1.4142), (-1, 1, 1.4142), (-1, -1, 1.4142)
-        ]
+        directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
         
-        for dx, dy, cost in directions:
+        for dx, dy in directions:
             nx, ny = x + dx, y + dy
             if self.is_valid_small(nx, ny):
                 if dx != 0 and dy != 0:
                     if not self.is_valid_small(x + dx, y) or not self.is_valid_small(x, y + dy):
                         continue
-                neighbors.append(((nx, ny), cost))
+                neighbors.append((nx, ny))
         return neighbors
 
     def octile_distance(self, a, b):
