@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import Int32
 from tf2_ros import Buffer, TransformListener
 import numpy as np
 import heapq
@@ -29,8 +30,9 @@ class AStarPlanner(Node):
         
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
         self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_callback, 10)
-        from std_msgs.msg import Int32
         self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
+        from std_msgs.msg import Empty
+        self.lap_comp_sub = self.create_subscription(Empty, '/lap_completed', self.lap_completed_callback, 10)
         self.path_pub = self.create_publisher(Path, '/plan', 10) # Keeping /plan as it matches RViz config
         
         self.tf_buffer = Buffer()
@@ -61,27 +63,6 @@ class AStarPlanner(Node):
         
         self.inflated_grid = np.where(inflated_mask, 100, 0)
         
-        # F1 MODE: Break the track loop with a virtual wall BEHIND the start line
-        # Map frame is rotated ~180° from Gazebo. Robot at map (-0.026, -0.581) faces -X.
-        # "Behind" the robot (backward direction) is +X in map frame.
-        # Wall blocks the backward shortcut so A* must plan forward around the full loop.
-        f1_mode = True
-        if f1_mode:
-            wall_x_m = 1.5    # +X = behind the robot in map frame
-            wall_y_m = -0.6   # Same Y as the robot's start position
-            wall_radius_m = 0.8
-            
-            w_gx = int((wall_x_m - msg.info.origin.position.x) / msg.info.resolution)
-            w_gy = int((wall_y_m - msg.info.origin.position.y) / msg.info.resolution)
-            w_r = int(wall_radius_m / msg.info.resolution)
-            
-            for y in range(max(0, w_gy - w_r), min(msg.info.height, w_gy + w_r)):
-                for x in range(max(0, w_gx - w_r), min(msg.info.width, w_gx + w_r)):
-                    if (x - w_gx)**2 + (y - w_gy)**2 <= w_r**2:
-                        self.inflated_grid[y, x] = 100
-            
-            self.get_logger().info(f"F1 Virtual Wall placed at map ({wall_x_m}, {wall_y_m}), radius {wall_radius_m}m, grid ({w_gx}, {w_gy})")
-        
         # Downsample preserving obstacles (Max Pooling)
         self.downsample_factor = self.get_parameter('downsample_factor').value
         if self.downsample_factor > 1:
@@ -96,27 +77,31 @@ class AStarPlanner(Node):
             
         self.get_logger().info(f"Map processed: inflated by {inflation_cells} cells ({inflation_radius_m}m), downsampled by {self.downsample_factor}")
 
-    def laps_callback(self, msg):
-        self.get_logger().info(f"Received Laps Command: {msg.data}. Setting goal behind virtual wall.")
-        goal = PoseStamped()
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.header.frame_id = 'map'
-        # Goal at map (+2.5, -0.6): behind the virtual wall at (+1.5, -0.6)
-        # The robot at (-0.026, -0.581) must go FORWARD (-X) around the entire loop
-        # to reach this point from the other direction.
-        goal.pose.position.x = 2.5
-        goal.pose.position.y = -0.6
-        goal.pose.orientation.w = 1.0
-        self.current_goal = goal
-        self.plan_path()
+
 
     def goal_callback(self, msg):
         self.current_goal = msg
         self.plan_path()
 
     def plan_timer_callback(self):
-        if self.current_goal is not None and self.small_grid is not None:
-            self.plan_path()
+        pass # Disabled for F1 Racing Mode
+
+    def lap_completed_callback(self, msg):
+        self.get_logger().info("Lap completed! Generating next loop.")
+        self.plan_path()
+
+    def laps_callback(self, msg):
+        self.get_logger().info(f"Received Laps Command: {msg.data}. Setting fixed goal.")
+        goal = PoseStamped()
+        goal.header.stamp = self.get_clock().now().to_msg()
+        goal.header.frame_id = 'map'
+        
+        # FIXED GOAL: Safely on the straightaway behind the start line
+        goal.pose.position.x = 2.5
+        goal.pose.position.y = -0.6
+        goal.pose.orientation.w = 1.0
+        self.current_goal = goal
+        self.plan_path()
 
     def get_robot_pose(self):
         try:
@@ -145,7 +130,25 @@ class AStarPlanner(Node):
     def is_valid_small(self, x, y):
         if x < 0 or x >= self.small_grid.shape[1] or y < 0 or y >= self.small_grid.shape[0]:
             return False
-        return self.small_grid[y, x] < 50
+        if self.small_grid[y, x] >= 50:
+            return False
+            
+        # DYNAMIC VIRTUAL WALL (Guillotine Block)
+        # Block a rectangle: 0.5m to 2.5m behind the robot, 8 meters wide (-4 to +4)
+        if hasattr(self, 'dynamic_wall') and self.dynamic_wall is not None:
+            rx, ry, ryaw = self.dynamic_wall
+            wx, wy = self.small_map_to_world(x, y)
+            
+            # Convert map coordinates to robot's local frame
+            dx = wx - rx
+            dy = wy - ry
+            local_x = dx * math.cos(-ryaw) - dy * math.sin(-ryaw)
+            local_y = dx * math.sin(-ryaw) + dy * math.cos(-ryaw)
+            
+            if -2.5 <= local_x <= -0.5 and -4.0 <= local_y <= 4.0:
+                return False
+                
+        return True
 
     def get_neighbors(self, node):
         x, y = node
@@ -173,7 +176,9 @@ class AStarPlanner(Node):
         rx, ry, ryaw = self.get_robot_pose()
         if rx is None:
             return
-
+            
+        self.dynamic_wall = (rx, ry, ryaw)
+        
         start = self.world_to_small_map(rx, ry)
         goal = self.world_to_small_map(self.current_goal.pose.position.x, self.current_goal.pose.position.y)
 
@@ -188,9 +193,6 @@ class AStarPlanner(Node):
         
         expanded_nodes = 0
         found = False
-        
-        dir_x = math.cos(ryaw)
-        dir_y = math.sin(ryaw)
 
         while open_set:
             current_f, current = heapq.heappop(open_set)
@@ -202,15 +204,6 @@ class AStarPlanner(Node):
                 
             for neighbor in self.get_neighbors(current):
                 step_cost = math.sqrt((current[0]-neighbor[0])**2 + (current[1]-neighbor[1])**2)
-                
-                # F1 constraint: Penalize backward movement within 40 cells (~4m) of start
-                dist_from_start = math.sqrt((current[0] - start[0])**2 + (current[1] - start[1])**2)
-                if dist_from_start < 40:
-                    vec_x = neighbor[0] - current[0]
-                    vec_y = neighbor[1] - current[1]
-                    dot = (vec_x * dir_x) + (vec_y * dir_y)
-                    if dot < 0:
-                        step_cost += 5000.0
                 
                 tentative_g_score = g_score[current] + step_cost
                 

@@ -35,8 +35,12 @@ class MPPITracker(Node):
         self.path_sub = self.create_subscription(Path, '/plan', self.path_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/ekf/odometry', self.odom_callback, 10)
         self.scan_sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, rclpy.qos.qos_profile_sensor_data)
+        from std_msgs.msg import Int32, Empty
         self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
+        
+        # Publishers
         self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel_raw', 10)
+        self.lap_comp_pub = self.create_publisher(Empty, '/lap_completed', 10)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -153,6 +157,9 @@ class MPPITracker(Node):
             if self.laps_remaining > 0:
                 self.laps_remaining -= 1
                 self.get_logger().info(f"Vuelta completada! Faltan {self.laps_remaining} vueltas.")
+                from std_msgs.msg import Empty
+                msg = Empty()
+                self.lap_comp_pub.publish(msg)
                 
         self.prev_closest_idx = closest_idx
             
@@ -173,9 +180,9 @@ class MPPITracker(Node):
             if dist_to_goal < 0.35 or passed_goal:
                 self.stop_vehicle()
                 if passed_goal:
-                    self.get_logger().info("Meta superada. Anclaje de emergencia activado.", throttle_duration_sec=2.0)
+                    self.get_logger().info("Meta superada. Anclaje de emergencia activado.")
                 else:
-                    self.get_logger().info("Carrera Finalizada. Estacionamiento preciso completado.", throttle_duration_sec=2.0)
+                    self.get_logger().info("Carrera Finalizada. Estacionamiento preciso completado.")
                 return
         else:
             # If we are doing laps, override the distance to goal so it NEVER brakes!
@@ -205,6 +212,7 @@ class MPPITracker(Node):
         if dist_to_goal < 1.5:
             stanley_steer *= (dist_to_goal / 1.5)
 
+        # Reactive Obstacle Avoidance (Potential Field)
         repulsion_radius = self.get_parameter('repulsion_radius').value
         repulsion_gain = self.get_parameter('repulsion_gain').value
         
