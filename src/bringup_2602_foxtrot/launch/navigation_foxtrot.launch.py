@@ -14,10 +14,16 @@ def generate_launch_description():
     # Variables de configuración
     use_sim_time = LaunchConfiguration('use_sim_time')
     map_yaml_file = LaunchConfiguration('map')
+    goal_x = LaunchConfiguration('goal_x')
+    goal_y = LaunchConfiguration('goal_y')
+    max_velocity = LaunchConfiguration('max_velocity')
 
     # Argumentos de lanzamiento
     declare_use_sim_time_cmd = DeclareLaunchArgument('use_sim_time', default_value='true')
     declare_map_yaml_cmd = DeclareLaunchArgument('map', default_value=default_map_path)
+    declare_goal_x_cmd = DeclareLaunchArgument('goal_x', default_value='0.5', description='Fixed X goal for A* F1')
+    declare_goal_y_cmd = DeclareLaunchArgument('goal_y', default_value='-0.6', description='Fixed Y goal for A* F1')
+    declare_max_velocity_cmd = DeclareLaunchArgument('max_velocity', default_value='6.0', description='Max racing velocity')
 
     # 1. Custom Global Path Planning: A* Search
     astar_planner_node = Node(
@@ -25,7 +31,11 @@ def generate_launch_description():
         executable='astar_planner.py',
         name='astar_planner',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'goal_x': goal_x,
+            'goal_y': goal_y
+        }]
     )
 
     # 4. Custom Path Tracking: MPPI
@@ -34,7 +44,10 @@ def generate_launch_description():
         executable='mppi_tracker.py',
         name='mppi_tracker',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}]
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'max_velocity': max_velocity
+        }]
     )
 
     # 5. Safety Override: Autonomous Emergency Braking (AEB)
@@ -57,6 +70,9 @@ def generate_launch_description():
     ld = LaunchDescription()
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_map_yaml_cmd)
+    ld.add_action(declare_goal_x_cmd)
+    ld.add_action(declare_goal_y_cmd)
+    ld.add_action(declare_max_velocity_cmd)
     
     ld.add_action(astar_planner_node)
     ld.add_action(mppi_tracker_node)

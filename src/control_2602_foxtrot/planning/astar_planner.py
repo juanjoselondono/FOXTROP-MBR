@@ -17,10 +17,12 @@ class AStarPlanner(Node):
     def __init__(self):
         super().__init__('astar_planner')
         
-        # Parameters
-        self.declare_parameter('inflation_radius_m', 0.45)
+        # Node parameters
+        self.declare_parameter('inflation_radius_m', 0.25) # REDUCED from 0.45 to allow passing cones in tight tracks
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
+        self.declare_parameter('goal_x', 2.5)
+        self.declare_parameter('goal_y', -0.6)
         
         qos = QoSProfile(
             depth=1, 
@@ -80,6 +82,8 @@ class AStarPlanner(Node):
 
 
     def goal_callback(self, msg):
+        self.get_logger().info("Received Manual Navigation Goal from RViz")
+        self.dynamic_wall = None  # Clear race wall for manual planning
         self.current_goal = msg
         self.plan_path()
 
@@ -91,16 +95,49 @@ class AStarPlanner(Node):
         self.plan_path()
 
     def laps_callback(self, msg):
-        self.get_logger().info(f"Received Laps Command: {msg.data}. Setting fixed goal.")
-        goal = PoseStamped()
-        goal.header.stamp = self.get_clock().now().to_msg()
-        goal.header.frame_id = 'map'
+        self.laps_remaining = msg.data
+        if self.laps_remaining <= 0:
+            return
+            
+        # Get robot pose
+        rx, ry, ryaw = self.get_robot_pose()
+        if rx is None:
+            self.get_logger().error("Cannot plan F1 lap: Robot pose unknown.")
+            return
+
+        # Auto-calculate the F1 Goal: Search behind the dynamic wall (-2.6m to -5.0m)
+        # to find a valid free cell, so A* never fails trying to reach an obstacle.
+        valid_goal_found = False
+        goal_x, goal_y = rx, ry
         
-        # FIXED GOAL: Safely on the straightaway behind the start line
-        goal.pose.position.x = 2.5
-        goal.pose.position.y = -0.6
+        # We must set self.dynamic_wall temporarily to use is_valid_small
+        self.dynamic_wall = (rx, ry, ryaw)
+        
+        for dist in np.arange(2.6, 6.0, 0.2):
+            test_gx = rx - dist * math.cos(ryaw)
+            test_gy = ry - dist * math.sin(ryaw)
+            
+            # Check if this cell is physically free (ignoring dynamic wall since it's behind it)
+            gx_idx, gy_idx = self.world_to_small_map(test_gx, test_gy)
+            if gx_idx is not None and gy_idx is not None:
+                if self.small_grid[gy_idx, gx_idx] < 50:
+                    goal_x, goal_y = test_gx, test_gy
+                    valid_goal_found = True
+                    break
+                    
+        if not valid_goal_found:
+            self.get_logger().error("A* F1: Could not find a valid free cell behind the robot for the goal!")
+            return
+
+        self.get_logger().info(f"F1 Mode: {self.laps_remaining} laps. Goal auto-set behind robot at ({goal_x:.2f}, {goal_y:.2f}).")
+
+        goal = PoseStamped()
+        goal.header.frame_id = 'map'
+        goal.pose.position.x = goal_x
+        goal.pose.position.y = goal_y
         goal.pose.orientation.w = 1.0
         self.current_goal = goal
+        
         self.plan_path()
 
     def get_robot_pose(self):

@@ -66,10 +66,10 @@ def generate_launch_description():
         arguments=[
             "-name", "foxtrot_bot",
             "-topic", "robot_description",
-            "-x", "-0.0",    # <--- Cambia X aquí
-            "-y", "0.5",    # <--- Cambia Y aquí
-            "-z", "0.2",    # <--- Cambia la altura Z aquí
-            "-Y", "0"
+            "-x", LaunchConfiguration("x"),
+            "-y", LaunchConfiguration("y"),
+            "-z", "0.2",
+            "-Y", LaunchConfiguration("yaw")
         ],
     )
 
@@ -212,21 +212,15 @@ def generate_launch_description():
     return LaunchDescription([
         gz_resource_path_update, # Injected environment variable
         
-        DeclareLaunchArgument(
-            "robot_type",
-            default_value="diffdrive",
-            description="Choose robot architecture: 'diffdrive' or 'ackermann'",
-        ),
-        DeclareLaunchArgument(
-            "use_sim_time",
-            default_value="true",
-            description="Use simulation (Gazebo) clock if true",
-        ),
-        DeclareLaunchArgument(
-            "world",
-            default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "exam1_world.sdf"),
-            description="Full path to world SDF file",
-        ),
+        DeclareLaunchArgument("robot_type", default_value="diffdrive", description="Choose robot architecture: 'diffdrive' or 'ackermann'"),
+        DeclareLaunchArgument("use_sim_time", default_value="true", description="Use simulation (Gazebo) clock if true"),
+        DeclareLaunchArgument("world", default_value=os.path.join(get_package_share_directory(gazebo_pkg_name), "worlds", "exam1_world.sdf"), description="Full path to world SDF file"),
+        
+        # New Pose Arguments
+        DeclareLaunchArgument("x", default_value="0.133", description="Initial X position"),
+        DeclareLaunchArgument("y", default_value="0.097", description="Initial Y position"),
+        DeclareLaunchArgument("yaw", default_value="0.0", description="Initial Yaw orientation"),
+        
         gz_launch,
         rsp,
         spawn,
@@ -240,9 +234,4 @@ def generate_launch_description():
         supervisor_node,     
         wall_follower_node,
         follow_gap_node,
-        #lane_keeper_node   
-        # delay_ackermann_spawner,
-        # twist_mux_node_ack
-        # twist_mux_node_ack,
-        # We replace the direct node calls with the delayed event handlers
     ])

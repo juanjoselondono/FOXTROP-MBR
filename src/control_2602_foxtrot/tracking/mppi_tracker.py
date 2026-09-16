@@ -23,14 +23,15 @@ class MPPITracker(Node):
         
         self.declare_parameter('max_velocity', 10.5)
         self.declare_parameter('min_velocity', 3.4)
-        self.declare_parameter('max_acceleration', 8.0)
-        self.declare_parameter('max_deceleration', 10.0)
+        self.declare_parameter('max_acceleration', 2.0)
+        self.declare_parameter('max_deceleration', 4.0)
         
-        self.declare_parameter('k_stanley', 6.0)
-        self.declare_parameter('k_soft', 1.0)# Reducido para que responda rápido a velocidades bajas
+        # TUNED FOR RELIABILITY
+        self.declare_parameter('k_stanley', 3.5)
+        self.declare_parameter('k_soft', 0.5)
         
         self.declare_parameter('repulsion_radius', 1.0)   
-        self.declare_parameter('repulsion_gain', 1.7)      
+        self.declare_parameter('repulsion_gain', 0.8)
 
         self.path_sub = self.create_subscription(Path, '/plan', self.path_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/ekf/odometry', self.odom_callback, 10)
@@ -153,7 +154,7 @@ class MPPITracker(Node):
             closest_idx = int(np.argmin(dists))
         
         # Lap detection: if we jump from end of path to beginning of path
-        if closest_idx < 50 and self.prev_closest_idx > len(self.global_path) - 50:
+        if len(self.global_path) > 200 and closest_idx < 50 and self.prev_closest_idx > len(self.global_path) - 50:
             if self.laps_remaining > 0:
                 self.laps_remaining -= 1
                 self.get_logger().info(f"Vuelta completada! Faltan {self.laps_remaining} vueltas.")
@@ -229,10 +230,11 @@ class MPPITracker(Node):
         # PERFILADO DE VELOCIDAD DE ARRASTRE (Creep Velocity)
         # =======================================================
         max_v = self.get_parameter('max_velocity').value
-        min_v = 2.5 # Reduced from 3.4 so it takes sharp corners safely without slipping
+        min_v = 2.0 # Reduced from 2.5 for tighter corners
         creep_v = 0.6 
         
-        lookahead_dist = max(6.0, max_v * 0.7) # Look ahead further at high speeds
+        # TUNED FOR RELIABILITY: Reduced lookahead to prevent cutting corners
+        lookahead_dist = max(2.5, max_v * 0.45)
         
         # 2. MODULACIÓN DE VELOCIDAD (Frenado en curvas circulares)
         if dist_to_goal < 4.0:

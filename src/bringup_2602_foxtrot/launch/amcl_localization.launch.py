@@ -54,11 +54,19 @@ def generate_launch_description():
     #              https://github.com/ros2/launch_ros/issues/56
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
+    initial_x = LaunchConfiguration('initial_x')
+    initial_y = LaunchConfiguration('initial_y')
+    initial_yaw = LaunchConfiguration('initial_yaw')
+
     configured_params = ParameterFile(
         RewrittenYaml(
             source_file=params_file,
             root_key=namespace,
-            param_rewrites={},
+            param_rewrites={
+                'initial_pose.x': initial_x,
+                'initial_pose.y': initial_y,
+                'initial_pose.yaw': initial_yaw,
+            },
             convert_types=True,
         ),
         allow_substs=True,
@@ -116,6 +124,10 @@ def generate_launch_description():
         'log_level', default_value='info', description='log level'
     )
 
+    declare_initial_x_cmd = DeclareLaunchArgument('initial_x', default_value='-0.026')
+    declare_initial_y_cmd = DeclareLaunchArgument('initial_y', default_value='-0.581')
+    declare_initial_yaw_cmd = DeclareLaunchArgument('initial_yaw', default_value='-2.993')
+
     load_nodes = GroupAction(
         condition=IfCondition(PythonExpression(['not ', use_composition])),
         actions=[
@@ -155,7 +167,15 @@ def generate_launch_description():
                 output='screen',
                 respawn=use_respawn,
                 respawn_delay=2.0,
-                parameters=[configured_params],
+                parameters=[
+                    configured_params, 
+                    {
+                        'set_initial_pose': True, 
+                        'initial_pose.x': initial_x, 
+                        'initial_pose.y': initial_y, 
+                        'initial_pose.yaw': initial_yaw
+                    }
+                ],
                 arguments=['--ros-args', '--log-level', log_level],
                 remappings=remappings,
             ),
@@ -218,7 +238,15 @@ def generate_launch_description():
                         package='nav2_amcl',
                         plugin='nav2_amcl::AmclNode',
                         name='amcl',
-                        parameters=[configured_params],
+                        parameters=[
+                            configured_params,
+                            {
+                                'set_initial_pose': True, 
+                                'initial_pose.x': initial_x, 
+                                'initial_pose.y': initial_y, 
+                                'initial_pose.yaw': initial_yaw
+                            }
+                        ],
                         remappings=remappings,
                     ),
                     ComposableNode(
@@ -250,6 +278,9 @@ def generate_launch_description():
     ld.add_action(declare_container_name_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_initial_x_cmd)
+    ld.add_action(declare_initial_y_cmd)
+    ld.add_action(declare_initial_yaw_cmd)
 
     # Add the actions to launch all of the localiztion nodes
     ld.add_action(load_nodes)

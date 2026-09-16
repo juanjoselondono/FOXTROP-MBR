@@ -25,15 +25,15 @@ tmux set-option -g mouse on
 
 # Panel 1: Gazebo Simulación
 tmux send-keys -t $P_GZ "source /opt/ros/jazzy/setup.bash && source install/setup.bash" C-m
-tmux send-keys -t $P_GZ "ros2 launch bringup_2602_foxtrot gz_spawn.launch.py world:=src/gazebo_2602_foxtrot/worlds/exam1_world.sdf gz_mode:=False" C-m
+tmux send-keys -t $P_GZ "ros2 launch bringup_2602_foxtrot gz_spawn.launch.py world:=src/gazebo_2602_foxtrot/worlds/exam1_world_obs.sdf gz_mode:=False x:=0.133 y:=0.097 yaw:=-0.004" C-m
 
 # Panel 2: Navigation (EKF + Trackers)
 tmux send-keys -t $P_NAV "source /opt/ros/jazzy/setup.bash && source install/setup.bash" C-m
-tmux send-keys -t $P_NAV "sleep 5 && ros2 launch bringup_2602_foxtrot navigation_foxtrot.launch.py use_sim_time:=true" C-m
+tmux send-keys -t $P_NAV "sleep 8 && ros2 launch bringup_2602_foxtrot navigation_foxtrot.launch.py use_sim_time:=true max_velocity:=6.0" C-m
 
 # Panel 3: AMCL Localization
 tmux send-keys -t $P_AMCL "source /opt/ros/jazzy/setup.bash && source install/setup.bash" C-m
-tmux send-keys -t $P_AMCL "sleep 7 && ros2 launch bringup_2602_foxtrot amcl_localization.launch.py map:=src/gazebo_2602_foxtrot/maps/map2.yaml use_sim_time:=true" C-m
+tmux send-keys -t $P_AMCL "sleep 12 && ros2 launch bringup_2602_foxtrot amcl_localization.launch.py map:=src/gazebo_2602_foxtrot/maps/map2.yaml use_sim_time:=true initial_x:=0.12722 initial_y:=-0.332774 initial_yaw:=-0.00807242" C-m
 
 # Panel 4: RViz2
 tmux send-keys -t $P_RVIZ "source /opt/ros/jazzy/setup.bash && source install/setup.bash" C-m
