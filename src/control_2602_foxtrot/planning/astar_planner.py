@@ -5,25 +5,37 @@ from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Int32
+from std_msgs.msg import Empty
 from tf2_ros import Buffer, TransformListener
 import numpy as np
 import heapq
 import math
 import time
-from scipy.ndimage import binary_dilation, generate_binary_structure, distance_transform_edt
+from scipy.ndimage import distance_transform_edt
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 class AStarPlanner(Node):
     def __init__(self):
         super().__init__('astar_planner')
         
-        # Node parameters
-        self.declare_parameter('inflation_radius_m', 0.40) # Increased to take wider corners
+        # Parámetros del nodo
+        self.declare_parameter('inflation_radius_m', 0.40)
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
         self.declare_parameter('goal_x', 2.5)
         self.declare_parameter('goal_y', -0.6)
         
+        # Radio estricto: Obliga al robot a terminar la curva antes de solicitar la siguiente ruta.
+        # Combinado con el temporizador a 20Hz, elimina el stutter sin cortar la pista.
+        self.declare_parameter('wp_transition_radius_m', 2.2) 
+
+        self.race_mode = False
+        self.race_waypoints = [
+            (-15.3759, 4.45454),
+            (-0.441745, -0.787758)
+        ]
+        self.current_wp_idx = 0
+
         qos = QoSProfile(
             depth=1, 
             reliability=ReliabilityPolicy.RELIABLE, 
@@ -33,9 +45,8 @@ class AStarPlanner(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, qos)
         self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_callback, 10)
         self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
-        from std_msgs.msg import Empty
         self.lap_comp_sub = self.create_subscription(Empty, '/lap_completed', self.lap_completed_callback, 10)
-        self.path_pub = self.create_publisher(Path, '/plan', 10) # Keeping /plan as it matches RViz config
+        self.path_pub = self.create_publisher(Path, '/plan', 10)
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -45,37 +56,31 @@ class AStarPlanner(Node):
         self.small_grid = None
         self.map_info = None
         
-        self.timer = self.create_timer(1.0, self.plan_timer_callback)
+        # Bucle de alta frecuencia (20 Hz) para reactividad instantánea sin retrasos (polling delay)
+        self.timer = self.create_timer(0.05, self.plan_timer_callback)
         self.current_goal = None
 
     def map_callback(self, msg):
         self.map_info = msg.info
         raw_grid = np.array(msg.data).reshape((msg.info.height, msg.info.width))
         
-        # Treat unknown (-1) conservatively as obstacles (100)
         processed_grid = np.where(raw_grid == -1, 100, raw_grid)
         
-        # Calculate Euclidean distance from every free cell to the nearest obstacle
         obstacle_mask = processed_grid > 50
         distances = distance_transform_edt(~obstacle_mask) * msg.info.resolution
         
-        # Hard lethal radius: Absolute minimum clearance (robot width / 2)
-        lethal_radius_m = 0.22 
-        # Soft cost radius: Prefer to stay this far away from walls (inflation radius)
+        lethal_radius_m = 0.10
         soft_radius_m = 0.65 
         
         costmap = np.zeros_like(processed_grid, dtype=np.float32)
         costmap[distances <= lethal_radius_m] = 100.0
         
-        # Soft cost gradient from 49 (near lethal) to 0 (at soft radius)
-        # We cap at 49 because `is_valid_small` treats >= 50 as fatal
         soft_mask = (distances > lethal_radius_m) & (distances < soft_radius_m)
         ratio = (soft_radius_m - distances[soft_mask]) / (soft_radius_m - lethal_radius_m)
         costmap[soft_mask] = 49.0 * ratio
         
         self.inflated_grid = costmap.astype(np.int32)
         
-        # Downsample preserving obstacles (Max Pooling)
         self.downsample_factor = self.get_parameter('downsample_factor').value
         if self.downsample_factor > 1:
             h, w = self.inflated_grid.shape
@@ -89,65 +94,36 @@ class AStarPlanner(Node):
             
         self.get_logger().info(f"Map processed: continuous costmap generated, downsampled by {self.downsample_factor}")
 
-
-
     def goal_callback(self, msg):
         self.get_logger().info("Received Manual Navigation Goal from RViz")
-        self.dynamic_wall = None  # Clear race wall for manual planning
+        self.dynamic_wall = None
         self.current_goal = msg
         self.plan_path()
 
     def plan_timer_callback(self):
-        pass # Disabled for F1 Racing Mode
-
-    def lap_completed_callback(self, msg):
-        self.get_logger().info("Lap completed! Generating next loop.")
-        self.plan_path()
-
-    def laps_callback(self, msg):
-        self.laps_remaining = msg.data
-        if self.laps_remaining <= 0:
+        if not self.race_mode:
             return
             
-        # Get robot pose
-        rx, ry, ryaw = self.get_robot_pose()
-        if rx is None:
-            self.get_logger().error("Cannot plan F1 lap: Robot pose unknown.")
+        rx, ry, _ = self.get_robot_pose()
+        if rx is None or self.current_goal is None:
             return
-
-        # Auto-calculate the F1 Goal: Search behind the dynamic wall (-2.6m to -5.0m)
-        # to find a valid free cell, so A* never fails trying to reach an obstacle.
-        valid_goal_found = False
-        goal_x, goal_y = rx, ry
+            
+        goal_x = self.current_goal.pose.position.x
+        goal_y = self.current_goal.pose.position.y
+        dist = math.hypot(goal_x - rx, goal_y - ry)
         
-        # We must set self.dynamic_wall temporarily to use is_valid_small
-        self.dynamic_wall = (rx, ry, ryaw)
+        transition_radius = self.get_parameter('wp_transition_radius_m').value
         
-        # Fan search: search backwards in an arc to find a valid free cell, even on curves
-        for dist in np.arange(2.6, 6.0, 0.2):
-            for angle_offset in [0.0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.2, -1.2]:
-                test_yaw = ryaw + angle_offset
-                test_gx = rx - dist * math.cos(test_yaw)
-                test_gy = ry - dist * math.sin(test_yaw)
-                
-                # Check if this cell is physically free
-                gx_idx, gy_idx = self.world_to_small_map(test_gx, test_gy)
-                if gx_idx is not None and gy_idx is not None:
-                    # Allow cells that are not completely lethal
-                    if 0 <= gy_idx < self.small_grid.shape[0] and 0 <= gx_idx < self.small_grid.shape[1]:
-                        if self.small_grid[gy_idx, gx_idx] < 50:
-                            goal_x, goal_y = test_gx, test_gy
-                            valid_goal_found = True
-                            break
-            if valid_goal_found:
-                break
-                    
-        if not valid_goal_found:
-            self.get_logger().error("A* F1: Could not find a valid free cell behind the robot for the goal!")
-            return
+        # Transición limpia: solo avanza al estar verdaderamente sobre el objetivo.
+        if dist < transition_radius:
+            self.advance_waypoint()
 
-        self.get_logger().info(f"F1 Mode: {self.laps_remaining} laps. Goal auto-set behind robot at ({goal_x:.2f}, {goal_y:.2f}).")
-
+    def advance_waypoint(self):
+        rx, ry, _ = self.get_robot_pose()
+        if rx is None: return
+        
+        goal_x, goal_y = self.race_waypoints[self.current_wp_idx]
+        
         goal = PoseStamped()
         goal.header.frame_id = 'map'
         goal.pose.position.x = float(goal_x)
@@ -155,7 +131,31 @@ class AStarPlanner(Node):
         goal.pose.orientation.w = 1.0
         self.current_goal = goal
         
+        self.get_logger().info(f"F1 Mode: En route to Waypoint {self.current_wp_idx + 1}/2 ({goal_x:.2f}, {goal_y:.2f}). Laps left: {self.laps_remaining}")
+        
+        self.current_wp_idx += 1
+        if self.current_wp_idx >= len(self.race_waypoints):
+            self.current_wp_idx = 0
+            self.laps_remaining -= 1
+            if self.laps_remaining < 0:
+                self.race_mode = False
+                self.get_logger().info("Race Finished!")
+                return
+                
         self.plan_path()
+
+    def laps_callback(self, msg):
+        self.laps_remaining = msg.data
+        if self.laps_remaining <= 0:
+            self.race_mode = False
+            return
+            
+        self.race_mode = True
+        self.current_wp_idx = 0
+        self.advance_waypoint()
+
+    def lap_completed_callback(self, msg):
+        self.get_logger().info("Señal de vuelta completada registrada en el sistema de telemetría.")
 
     def get_robot_pose(self):
         try:
@@ -187,19 +187,16 @@ class AStarPlanner(Node):
         if self.small_grid[y, x] >= 50:
             return False
             
-        # DYNAMIC VIRTUAL WALL (Guillotine Block)
-        # Block a rectangle: 0.5m to 2.5m behind the robot, 8 meters wide (-4 to +4)
         if hasattr(self, 'dynamic_wall') and self.dynamic_wall is not None:
             rx, ry, ryaw = self.dynamic_wall
             wx, wy = self.small_map_to_world(x, y)
             
-            # Convert map coordinates to robot's local frame
             dx = wx - rx
             dy = wy - ry
             local_x = dx * math.cos(-ryaw) - dy * math.sin(-ryaw)
             local_y = dx * math.sin(-ryaw) + dy * math.cos(-ryaw)
             
-            if -2.5 <= local_x <= -0.5 and -4.0 <= local_y <= 4.0:
+            if -2.5 <= local_x <= -0.5 and -0.8 <= local_y <= 0.8:
                 return False
                 
         return True
@@ -231,7 +228,8 @@ class AStarPlanner(Node):
         if rx is None:
             return
             
-        self.dynamic_wall = (rx, ry, ryaw)
+        if getattr(self, 'race_mode', False):
+            self.dynamic_wall = (rx, ry, ryaw)
         
         start = self.world_to_small_map(rx, ry)
         goal = self.world_to_small_map(self.current_goal.pose.position.x, self.current_goal.pose.position.y)
@@ -259,8 +257,6 @@ class AStarPlanner(Node):
             for neighbor in self.get_neighbors(current):
                 step_cost = math.sqrt((current[0]-neighbor[0])**2 + (current[1]-neighbor[1])**2)
                 
-                # Add obstacle penalty cost
-                # Multiply by 0.1 so a max soft cost of 49 equals 4.9 "meters" of extra distance
                 penalty = self.small_grid[neighbor[1], neighbor[0]] * 0.1
                 
                 tentative_g_score = g_score[current] + step_cost + penalty
@@ -297,7 +293,6 @@ class AStarPlanner(Node):
         if len(path) < 3:
             return path
             
-        # 1. Remove redundant collinear points to compress path definition
         simplified = [path[0]]
         for i in range(1, len(path)-1):
             p1, p2, p3 = simplified[-1], path[i], path[i+1]
@@ -306,7 +301,6 @@ class AStarPlanner(Node):
                 simplified.append(p2)
         simplified.append(path[-1])
         
-        # 2. Interpolation along the exact safe grid segments
         res = self.get_parameter('path_resolution_m').value
         interpolated = []
         for i in range(len(simplified)-1):
