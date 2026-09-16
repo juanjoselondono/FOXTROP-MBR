@@ -14,7 +14,7 @@ class KinematicAEBFilter(Node):
         
         self.max_deceleration = 8.0  
         self.safety_margin = 0.2     
-        self.front_cone_angle = 1.0  # What it represents: The angular width of the monitoring zone directly ahead of the vehicle.
+        self.front_cone_angle = 3.14  # What it represents: The angular width of the monitoring zone directly ahead of the vehicle.
         
         self.latest_scan = None
         
@@ -45,12 +45,22 @@ class KinematicAEBFilter(Node):
         min_dist = float('inf')
         msg = self.latest_scan
         
+        # Consider a rectangular corridor in front of the robot (width = 0.6m)
+        corridor_width = 0.6 
+        
         for i, r in enumerate(msg.ranges):
-            if math.isinf(r) or math.isnan(r) or r < 0.4:
+            if math.isinf(r) or math.isnan(r) or r < 0.1:
                 continue
                 
             angle = msg.angle_min + (i * msg.angle_increment)
-            if abs(angle) <= self.front_cone_angle / 2.0:
+            
+            # Convert to Cartesian relative to robot
+            x = r * math.cos(angle)
+            y = r * math.sin(angle)
+            
+            # Check if point is in front of the robot and inside the width corridor
+            if x > 0.0 and abs(y) <= corridor_width / 2.0:
+                # We use the Euclidean distance to the obstacle in the corridor
                 if r < min_dist:
                     min_dist = r
                     

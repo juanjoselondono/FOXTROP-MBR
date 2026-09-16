@@ -54,19 +54,11 @@ def generate_launch_description():
     #              https://github.com/ros2/launch_ros/issues/56
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
-    initial_x = LaunchConfiguration('initial_x')
-    initial_y = LaunchConfiguration('initial_y')
-    initial_yaw = LaunchConfiguration('initial_yaw')
-
     configured_params = ParameterFile(
         RewrittenYaml(
             source_file=params_file,
             root_key=namespace,
-            param_rewrites={
-                'initial_pose.x': initial_x,
-                'initial_pose.y': initial_y,
-                'initial_pose.yaw': initial_yaw,
-            },
+            param_rewrites={},
             convert_types=True,
         ),
         allow_substs=True,
@@ -167,15 +159,7 @@ def generate_launch_description():
                 output='screen',
                 respawn=use_respawn,
                 respawn_delay=2.0,
-                parameters=[
-                    configured_params, 
-                    {
-                        'set_initial_pose': True, 
-                        'initial_pose.x': initial_x, 
-                        'initial_pose.y': initial_y, 
-                        'initial_pose.yaw': initial_yaw
-                    }
-                ],
+                parameters=[configured_params],
                 arguments=['--ros-args', '--log-level', log_level],
                 remappings=remappings,
             ),
@@ -238,15 +222,7 @@ def generate_launch_description():
                         package='nav2_amcl',
                         plugin='nav2_amcl::AmclNode',
                         name='amcl',
-                        parameters=[
-                            configured_params,
-                            {
-                                'set_initial_pose': True, 
-                                'initial_pose.x': initial_x, 
-                                'initial_pose.y': initial_y, 
-                                'initial_pose.yaw': initial_yaw
-                            }
-                        ],
+                        parameters=[configured_params],
                         remappings=remappings,
                     ),
                     ComposableNode(

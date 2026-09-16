@@ -19,7 +19,7 @@ class MPPITracker(Node):
         # =======================================================
         self.declare_parameter('control_frequency', 50.0) 
         self.declare_parameter('wheelbase', 0.42)          
-        self.declare_parameter('max_steering_angle', 2.0)  
+        self.declare_parameter('max_steering_angle', 3.5)  
         
         self.declare_parameter('max_velocity', 10.5)
         self.declare_parameter('min_velocity', 3.4)
@@ -40,7 +40,7 @@ class MPPITracker(Node):
         self.laps_sub = self.create_subscription(Int32, '/laps_cmd', self.laps_callback, 10)
         
         # Publishers
-        self.cmd_pub = self.create_publisher(TwistStamped, '/cmd_vel_raw', 10)
+        self.cmd_pub = self.create_publisher(TwistStamped, 'cmd_vel_nav', 10)
         self.lap_comp_pub = self.create_publisher(Empty, '/lap_completed', 10)
 
         self.tf_buffer = Buffer()
@@ -59,7 +59,7 @@ class MPPITracker(Node):
         self.dt = 1.0 / self.get_parameter('control_frequency').value
         self.timer = self.create_timer(self.dt, self.control_loop)
         
-        self.get_logger().info("Controlador STANLEY en línea. Freno Ortogonal (Anti-Orbiting) activado.")
+        self.get_logger().info("Controlador PURE PURSUIT en línea. Freno Ortogonal (Anti-Orbiting) activado.")
 
     def laps_callback(self, msg):
         self.laps_remaining = msg.data
@@ -189,29 +189,35 @@ class MPPITracker(Node):
             # If we are doing laps, override the distance to goal so it NEVER brakes!
             dist_to_goal = 999.0
             
-        # Circular next point for steering
-        next_idx = (closest_idx + 1) % len(self.global_path)
-        px = self.global_path[closest_idx, 0]
-        py = self.global_path[closest_idx, 1]
-        px_next = self.global_path[next_idx, 0]
-        py_next = self.global_path[next_idx, 1]
+        # =======================================================
+        # 1. PURE PURSUIT CONTROL LAW
+        # =======================================================
+        # Lookahead distance scales with velocity, but keep it tight for sharp corners
+        ld = max(0.35, 0.20 * self.current_vel)
         
-        path_yaw = math.atan2(py_next - py, px_next - px)
+        # Find lookahead point
+        target_idx = closest_idx
+        dist_accum = 0.0
+        for i in range(1, 100):
+            idx1 = (closest_idx + i - 1) % len(self.global_path)
+            idx2 = (closest_idx + i) % len(self.global_path)
+            dist_accum += math.hypot(self.global_path[idx2, 0] - self.global_path[idx1, 0], 
+                                     self.global_path[idx2, 1] - self.global_path[idx1, 1])
+            if dist_accum >= ld:
+                target_idx = idx2
+                break
+                
+        tx = self.global_path[target_idx, 0]
+        ty = self.global_path[target_idx, 1]
         
-        theta_e = path_yaw - ryaw
-        theta_e = math.atan2(math.sin(theta_e), math.cos(theta_e)) 
+        # Calculate Pure Pursuit angular velocity for Differential Drive
+        alpha = math.atan2(ty - fy, tx - fx) - ryaw
+        alpha = math.atan2(math.sin(alpha), math.cos(alpha))
         
-        cross_prod = (px_next - px) * (fy - py) - (py_next - py) * (fx - px)
-        e_y = math.copysign(dists[closest_idx], cross_prod)
-        
-        k_stanley = self.get_parameter('k_stanley').value
-        k_soft = self.get_parameter('k_soft').value
-        
-        stanley_steer = theta_e + math.atan2(-k_stanley * e_y, abs(self.current_vel) + k_soft)
-        
-        # Atenuación de dirección terminal (evita zig-zag al llegar)
-        if dist_to_goal < 1.5:
-            stanley_steer *= (dist_to_goal / 1.5)
+        # Omega = (2 * v * sin(alpha)) / Ld
+        # We use a minimum velocity to allow turning even when stopped
+        v_eff = max(0.5, self.current_vel)
+        pp_steer = (2.0 * v_eff * math.sin(alpha)) / ld
 
         # Reactive Obstacle Avoidance (Potential Field)
         repulsion_radius = self.get_parameter('repulsion_radius').value
@@ -220,21 +226,21 @@ class MPPITracker(Node):
         if self.closest_obstacle_dist < repulsion_radius:
             repulsion = (repulsion_radius - self.closest_obstacle_dist) * repulsion_gain
             if self.closest_obstacle_angle > 0: 
-                stanley_steer -= repulsion      
+                pp_steer -= repulsion      
             else:                               
-                stanley_steer += repulsion      
+                pp_steer += repulsion      
 
-        steer_angle = float(np.clip(stanley_steer, -max_steer, max_steer))
+        steer_angle = float(np.clip(pp_steer, -max_steer, max_steer))
 
         # =======================================================
         # PERFILADO DE VELOCIDAD DE ARRASTRE (Creep Velocity)
         # =======================================================
         max_v = self.get_parameter('max_velocity').value
-        min_v = 2.0 # Reduced from 2.5 for tighter corners
+        min_v = 1.2 # REDUCED from 2.0 to allow sharper, slower turns in tight corners
         creep_v = 0.6 
         
-        # TUNED FOR RELIABILITY: Reduced lookahead to prevent cutting corners
-        lookahead_dist = max(2.5, max_v * 0.45)
+        # TUNED FOR RELIABILITY: Reduced lookahead to prevent missing immediate corners
+        lookahead_dist = 2.0
         
         # 2. MODULACIÓN DE VELOCIDAD (Frenado en curvas circulares)
         if dist_to_goal < 4.0:
@@ -279,7 +285,7 @@ class MPPITracker(Node):
 
         comp_time = (time.perf_counter() - t0) * 1000.0
         self.get_logger().info(
-            f"STANLEY | D2G:{dist_to_goal:.2f}m | tgt:{target_vel:.2f} vel:{cmd_v:.2f} str:{steer_angle:.2f}"
+            f"PURE PURSUIT | D2G:{dist_to_goal:.2f}m | tgt:{target_vel:.2f} vel:{cmd_v:.2f} str:{steer_angle:.2f}"
         )
 
 def main(args=None):

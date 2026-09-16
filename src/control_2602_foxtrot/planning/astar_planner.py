@@ -10,7 +10,7 @@ import numpy as np
 import heapq
 import math
 import time
-from scipy.ndimage import binary_dilation, generate_binary_structure
+from scipy.ndimage import binary_dilation, generate_binary_structure, distance_transform_edt
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 class AStarPlanner(Node):
@@ -18,7 +18,7 @@ class AStarPlanner(Node):
         super().__init__('astar_planner')
         
         # Node parameters
-        self.declare_parameter('inflation_radius_m', 0.25) # REDUCED from 0.45 to allow passing cones in tight tracks
+        self.declare_parameter('inflation_radius_m', 0.40) # Increased to take wider corners
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
         self.declare_parameter('goal_x', 2.5)
@@ -55,15 +55,25 @@ class AStarPlanner(Node):
         # Treat unknown (-1) conservatively as obstacles (100)
         processed_grid = np.where(raw_grid == -1, 100, raw_grid)
         
-        inflation_radius_m = self.get_parameter('inflation_radius_m').value
-        inflation_cells = math.ceil(inflation_radius_m / msg.info.resolution)
-        
-        # Inflate obstacles using binary_dilation
+        # Calculate Euclidean distance from every free cell to the nearest obstacle
         obstacle_mask = processed_grid > 50
-        struct = generate_binary_structure(2, 2) # 8-connected
-        inflated_mask = binary_dilation(obstacle_mask, structure=struct, iterations=inflation_cells)
+        distances = distance_transform_edt(~obstacle_mask) * msg.info.resolution
         
-        self.inflated_grid = np.where(inflated_mask, 100, 0)
+        # Hard lethal radius: Absolute minimum clearance (robot width / 2)
+        lethal_radius_m = 0.22 
+        # Soft cost radius: Prefer to stay this far away from walls (inflation radius)
+        soft_radius_m = 0.65 
+        
+        costmap = np.zeros_like(processed_grid, dtype=np.float32)
+        costmap[distances <= lethal_radius_m] = 100.0
+        
+        # Soft cost gradient from 49 (near lethal) to 0 (at soft radius)
+        # We cap at 49 because `is_valid_small` treats >= 50 as fatal
+        soft_mask = (distances > lethal_radius_m) & (distances < soft_radius_m)
+        ratio = (soft_radius_m - distances[soft_mask]) / (soft_radius_m - lethal_radius_m)
+        costmap[soft_mask] = 49.0 * ratio
+        
+        self.inflated_grid = costmap.astype(np.int32)
         
         # Downsample preserving obstacles (Max Pooling)
         self.downsample_factor = self.get_parameter('downsample_factor').value
@@ -77,7 +87,7 @@ class AStarPlanner(Node):
         else:
             self.small_grid = self.inflated_grid
             
-        self.get_logger().info(f"Map processed: inflated by {inflation_cells} cells ({inflation_radius_m}m), downsampled by {self.downsample_factor}")
+        self.get_logger().info(f"Map processed: continuous costmap generated, downsampled by {self.downsample_factor}")
 
 
 
@@ -113,17 +123,24 @@ class AStarPlanner(Node):
         # We must set self.dynamic_wall temporarily to use is_valid_small
         self.dynamic_wall = (rx, ry, ryaw)
         
+        # Fan search: search backwards in an arc to find a valid free cell, even on curves
         for dist in np.arange(2.6, 6.0, 0.2):
-            test_gx = rx - dist * math.cos(ryaw)
-            test_gy = ry - dist * math.sin(ryaw)
-            
-            # Check if this cell is physically free (ignoring dynamic wall since it's behind it)
-            gx_idx, gy_idx = self.world_to_small_map(test_gx, test_gy)
-            if gx_idx is not None and gy_idx is not None:
-                if self.small_grid[gy_idx, gx_idx] < 50:
-                    goal_x, goal_y = test_gx, test_gy
-                    valid_goal_found = True
-                    break
+            for angle_offset in [0.0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.2, -1.2]:
+                test_yaw = ryaw + angle_offset
+                test_gx = rx - dist * math.cos(test_yaw)
+                test_gy = ry - dist * math.sin(test_yaw)
+                
+                # Check if this cell is physically free
+                gx_idx, gy_idx = self.world_to_small_map(test_gx, test_gy)
+                if gx_idx is not None and gy_idx is not None:
+                    # Allow cells that are not completely lethal
+                    if 0 <= gy_idx < self.small_grid.shape[0] and 0 <= gx_idx < self.small_grid.shape[1]:
+                        if self.small_grid[gy_idx, gx_idx] < 50:
+                            goal_x, goal_y = test_gx, test_gy
+                            valid_goal_found = True
+                            break
+            if valid_goal_found:
+                break
                     
         if not valid_goal_found:
             self.get_logger().error("A* F1: Could not find a valid free cell behind the robot for the goal!")
@@ -133,8 +150,8 @@ class AStarPlanner(Node):
 
         goal = PoseStamped()
         goal.header.frame_id = 'map'
-        goal.pose.position.x = goal_x
-        goal.pose.position.y = goal_y
+        goal.pose.position.x = float(goal_x)
+        goal.pose.position.y = float(goal_y)
         goal.pose.orientation.w = 1.0
         self.current_goal = goal
         
@@ -242,7 +259,11 @@ class AStarPlanner(Node):
             for neighbor in self.get_neighbors(current):
                 step_cost = math.sqrt((current[0]-neighbor[0])**2 + (current[1]-neighbor[1])**2)
                 
-                tentative_g_score = g_score[current] + step_cost
+                # Add obstacle penalty cost
+                # Multiply by 0.1 so a max soft cost of 49 equals 4.9 "meters" of extra distance
+                penalty = self.small_grid[neighbor[1], neighbor[0]] * 0.1
+                
+                tentative_g_score = g_score[current] + step_cost + penalty
                 
                 if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
@@ -276,7 +297,7 @@ class AStarPlanner(Node):
         if len(path) < 3:
             return path
             
-        # 1. Remove redundant collinear points
+        # 1. Remove redundant collinear points to compress path definition
         simplified = [path[0]]
         for i in range(1, len(path)-1):
             p1, p2, p3 = simplified[-1], path[i], path[i+1]
@@ -285,29 +306,11 @@ class AStarPlanner(Node):
                 simplified.append(p2)
         simplified.append(path[-1])
         
-        # 2. Simple shortcut smoothing (collision-aware)
-        smoothed = [simplified[0]]
-        for i in range(1, len(simplified)-1):
-            p0 = smoothed[-1]
-            p1 = simplified[i]
-            p2 = simplified[i+1]
-            
-            new_x = 0.5 * p0[0] + 0.5 * p1[0]
-            new_y = 0.5 * p0[1] + 0.5 * p1[1]
-            
-            mx = int((new_x - self.map_info.origin.position.x) / self.map_info.resolution)
-            my = int((new_y - self.map_info.origin.position.y) / self.map_info.resolution)
-            if 0 <= mx < self.inflated_grid.shape[1] and 0 <= my < self.inflated_grid.shape[0] and self.inflated_grid[my, mx] < 50:
-                smoothed.append((new_x, new_y))
-            else:
-                smoothed.append(p1)
-        smoothed.append(simplified[-1])
-        
-        # 3. Interpolation
+        # 2. Interpolation along the exact safe grid segments
         res = self.get_parameter('path_resolution_m').value
         interpolated = []
-        for i in range(len(smoothed)-1):
-            p1, p2 = smoothed[i], smoothed[i+1]
+        for i in range(len(simplified)-1):
+            p1, p2 = simplified[i], simplified[i+1]
             dist = math.hypot(p2[0]-p1[0], p2[1]-p1[1])
             num_pts = max(1, int(dist / res))
             for j in range(num_pts):
@@ -315,7 +318,7 @@ class AStarPlanner(Node):
                     p1[0] + (p2[0]-p1[0]) * j / num_pts,
                     p1[1] + (p2[1]-p1[1]) * j / num_pts
                 ))
-        interpolated.append(smoothed[-1])
+        interpolated.append(simplified[-1])
         return interpolated
 
     def publish_path(self, world_path):
