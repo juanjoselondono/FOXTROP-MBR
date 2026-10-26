@@ -1,114 +1,134 @@
-import numpy as np
-import matplotlib.pyplot as plt
+import argparse
+import dataclasses
 from pathlib import Path
+import matplotlib.pyplot as plt
+import pandas as pd
 from rosbags.highlevel import AnyReader
-import math
-import sys
 
-def yaw_from_quaternion(q):
-    """Extracts the yaw (Z) angle from a ROS 2 geometry_msgs/Quaternion."""
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-def normalize_trajectory(traj_array):
-    """Translates and rotates a trajectory to start exactly at (0,0) facing 0 radians."""
-    # traj_array format: [timestamp, x, y, yaw]
-    x0, y0, yaw0 = traj_array[0, 1], traj_array[0, 2], traj_array[0, 3]
+def flatten_msg(msg, prefix=''):
+    """
+    Recursively flattens a ROS 2 message object into a flat dictionary.
+    Handles rosbags dataclasses, standard slots, and numpy arrays.
+    """
+    items = {}
     
-    # Translate to origin
-    dx = traj_array[:, 1] - x0
-    dy = traj_array[:, 2] - y0
-    
-    # Rotate by -yaw0 to align heading
-    c, s = np.cos(-yaw0), np.sin(-yaw0)
-    x_norm = dx * c - dy * s
-    y_norm = dx * s + dy * c
-    
-    return x_norm, y_norm
+    # 1. Handle rosbags dynamically generated dataclasses
+    if dataclasses.is_dataclass(msg):
+        for field in dataclasses.fields(msg):
+            val = getattr(msg, field.name)
+            new_key = f"{prefix}.{field.name}" if prefix else field.name
+            items.update(flatten_msg(val, new_key))
+            
+    # 2. Handle standard rclpy messages (fallback)
+    elif hasattr(msg, '__slots__'):
+        for slot in msg.__slots__:
+            val = getattr(msg, slot)
+            new_key = f"{prefix}.{slot}" if prefix else slot
+            items.update(flatten_msg(val, new_key))
+            
+    # 3. Handle standard arrays/lists
+    elif isinstance(msg, (list, tuple)):
+        for i, val in enumerate(msg):
+            new_key = f"{prefix}[{i}]"
+            items.update(flatten_msg(val, new_key))
+            
+    # 4. Handle numpy arrays natively without needing numpy imported
+    elif hasattr(msg, 'shape') and hasattr(msg, 'tolist'):
+        for i, val in enumerate(msg.tolist()):
+            new_key = f"{prefix}[{i}]"
+            items.update(flatten_msg(val, new_key))
+            
+    # 5. Base primitives
+    else:
+        items[prefix] = msg
+        
+    return items
 
-# =========================================================================
-# 1. Configuration
-# =========================================================================
-bag_path = 'odom_ekf_comparison' 
-ekf_topic = '/ekf/odometry'
-odom_topic = '/diffdrive_controller/odom'
+def process_bag(bag_path):
+    """
+    Iterates through the ROS 2 bag, deserializes payloads automatically, 
+    and organizes data into Pandas-ready dictionaries.
+    """
+    data_store = {}
 
-ekf_raw, odom_raw = [], []
-
-print(f"Parsing offline MCAP file in: {bag_path} ...")
-
-try:
-    with AnyReader([Path(bag_path)]) as reader:
+    with AnyReader([bag_path]) as reader:
         for connection, timestamp, rawdata in reader.messages():
-            if connection.topic == ekf_topic:
-                msg = reader.deserialize(rawdata, connection.msgtype)
-                yaw = yaw_from_quaternion(msg.pose.pose.orientation)
-                # Store timestamp alongside spatial data
-                ekf_raw.append([timestamp, msg.pose.pose.position.x, msg.pose.pose.position.y, yaw])
-            elif connection.topic == odom_topic:
-                msg = reader.deserialize(rawdata, connection.msgtype)
-                yaw = yaw_from_quaternion(msg.pose.pose.orientation)
-                odom_raw.append([timestamp, msg.pose.pose.position.x, msg.pose.pose.position.y, yaw])
-except Exception as e:
-    print(f"System error reading bag: {e}")
-    sys.exit(1)
+            topic = connection.topic
+            
+            # Deserialize payload
+            msg = reader.deserialize(rawdata, connection.msgtype)
 
-if not ekf_raw or not odom_raw:
-    print(f"Error: Could not find data on {ekf_topic} or {odom_topic}.")
-    sys.exit(1)
+            # Flatten the nested message structure
+            flat_msg = flatten_msg(msg)
+            
+            # Append hardware timestamp (nanoseconds to seconds)
+            flat_msg['timestamp'] = timestamp * 1e-9 
 
-ekf_raw = np.array(ekf_raw)
-odom_raw = np.array(odom_raw)
+            if topic not in data_store:
+                data_store[topic] = []
 
-# =========================================================================
-# 2. Time Synchronization
-# =========================================================================
-print("Synchronizing telemetry timestamps...")
-# Find the latest start time so both datasets begin exactly together
-start_time = max(ekf_raw[0, 0], odom_raw[0, 0])
+            data_store[topic].append(flat_msg)
 
-# Truncate any asynchronous lead-in data
-ekf_sync = ekf_raw[ekf_raw[:, 0] >= start_time]
-odom_sync = odom_raw[odom_raw[:, 0] >= start_time]
+    return data_store
 
-if len(ekf_sync) == 0 or len(odom_sync) == 0:
-    print("Error: No overlapping timestamps found between topics.")
-    sys.exit(1)
+def plot_data(data_store):
+    """
+    Filters for numeric variables and plots them. 
+    Each topic generates a figure with subplots for its variables.
+    """
+    for topic, records in data_store.items():
+        df = pd.DataFrame(records)
+        
+        if 'timestamp' not in df.columns:
+            continue
 
-# =========================================================================
-# 3. Normalize Trajectories
-# =========================================================================
-print("Aligning coordinate frames...")
-ekf_x, ekf_y = normalize_trajectory(ekf_sync)
-odom_x, odom_y = normalize_trajectory(odom_sync)
+        # Set index to time
+        df.set_index('timestamp', inplace=True)
+        
+        # Force conversion of typed scalars (e.g., numpy floats) to standard numerics
+        df = df.apply(pd.to_numeric, errors='ignore')
+        
+        # Extract only columns that are officially numbers
+        df_numeric = df.select_dtypes(include=['number'])
 
-# =========================================================================
-# 4. Dynamic Metric Calculations
-# =========================================================================
-dx_diff, dy_diff = np.diff(ekf_x), np.diff(ekf_y)
-dist_driven = np.sum(np.sqrt(dx_diff**2 + dy_diff**2))
+        if df_numeric.empty:
+            print(f"Skipping {topic}: No numeric data extracted after flattening.")
+            continue
 
-final_drift = math.hypot(odom_x[-1] - ekf_x[-1], odom_y[-1] - ekf_y[-1])
+        num_cols = len(df_numeric.columns)
+        print(f"Plotting {num_cols} variables for topic: {topic}")
+        
+        # Scale figure size dynamically based on variable count
+        fig, axes = plt.subplots(nrows=num_cols, ncols=1, figsize=(12, 2 * num_cols), sharex=True)
+        fig.suptitle(f"Topic Data: {topic}", fontsize=14, fontweight='bold')
 
-print(f"Alignment complete. True Drift: {final_drift:.2f}m over {dist_driven:.1f}m.")
+        if num_cols == 1:
+            axes = [axes]
 
-# =========================================================================
-# 5. Trajectory Visualization
-# =========================================================================
-plt.figure(figsize=(8, 5.5))
+        for ax, col in zip(axes, df_numeric.columns):
+            ax.plot(df.index, df_numeric[col], label=col, linewidth=1.5)
+            ax.set_ylabel(col.split('.')[-1], rotation=0, labelpad=40, ha='right')
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.legend(loc='upper right', fontsize=8)
 
-plt.plot(ekf_x, ekf_y, '-', color='#2B82BA', linewidth=2.5, label='EKF Odometry')
-plt.plot(odom_x, odom_y, '--', color='#F28C2B', linewidth=2.5, label='/odom (dead reckoning)')
+        plt.xlabel("Time (s)")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+        
+    print("Rendering plots. Close the current window to proceed to the next topic.")
+    plt.show()
 
-plt.plot(0, 0, 'ko', markersize=7, label='Start')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Extract and plot all numeric variables from a ROS 2 bag.")
+    parser.add_argument("bag_path", type=str, help="Path to the ROS 2 bag directory (or .mcap file).")
+    args = parser.parse_args()
 
-plt.title(f'Dead-reckoning drift vs EKF: {final_drift:.2f} m after {dist_driven:.1f} m driven', fontsize=14)
-plt.xlabel('x [m]', fontsize=12)
-plt.ylabel('y [m]', fontsize=12)
-plt.axis('equal')
-plt.grid(True, alpha=0.4)
-plt.legend(loc='lower right', fontsize=11)
+    bag_path = Path(args.bag_path)
+    if not bag_path.exists():
+        print(f"Error: Path {bag_path} does not exist.")
+        exit(1)
 
-plt.tight_layout()
-plt.show()
+    print(f"Initializing data extraction sequence for: {bag_path}")
+    extracted_data = process_bag(bag_path)
+    
+    print("Data extraction complete. Compiling visualization parameters...")
+    plot_data(extracted_data)

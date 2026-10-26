@@ -1,0 +1,18 @@
+# speed_estimator_params.yaml
+# ============================
+# Default parameters for the online speed estimator node.
+# Update K, tau, and u_dead after running scripts/fit_model.py.
+#
+# Run: ros2 launch sysid_2602_foxtrot speed_estimator.launch.py
+# Or override per-parameter:
+#   ros2 run sysid_2602_foxtrot speed_estimator_node --ros-args -p K:=1.23 -p tau:=0.28
+
+speed_estimator_node:
+  ros__parameters:
+    # ── Model parameters (update after running fit_model.py) ────────────────
+    K:      1.0      # [m/s per unit command]  steady-state speed gain
+    tau:    0.3      # [s]                      first-order time constant
+    u_dead: 0.05     # [normalised, 0..1]       ESC dead zone threshold
+
+    # ── Estimator update rate ────────────────────────────────────────────────
+    dt: 0.05         # [s] = 20 Hz  (must match create_timer period above)
