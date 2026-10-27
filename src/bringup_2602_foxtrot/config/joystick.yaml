@@ -10,7 +10,7 @@ teleop_node:
     axis_linear:
       x: 1
     scale_linear:
-      x: 0.3 #0.5 max
+      x: 0.4 #0.5 max
 
     axis_angular:
       yaw: 2 # 2 for Logitech horizontal axis (3 was mapped to vertical/Sony layout)
