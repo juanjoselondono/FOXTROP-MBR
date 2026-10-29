@@ -1,0 +1,67 @@
+{
+  "longitudinal": {
+    "low": {
+      "identified": true,
+      "params": {
+        "K": 43.183412629807385,
+        "tau": 1.7804180960587717,
+        "u_dead": 0.14413417154190386
+      },
+      "train_rmse": 0.2704725386394982,
+      "val_rmse": 0.3298412036849353,
+      "n_train_segments": 30,
+      "n_val_segments": 6,
+      "K_identifiable": true
+    },
+    "medium": {
+      "identified": false,
+      "params": null,
+      "train_rmse": null,
+      "val_rmse": null,
+      "n_train_segments": 0,
+      "n_val_segments": 0
+    }
+  },
+  "lateral": {
+    "low": {
+      "identified": true,
+      "params": {
+        "K_steer": 0.2864457264762567
+      },
+      "train_rmse": 0.27067525239795337,
+      "val_rmse": 0.21980670420418905,
+      "n_train_segments": 84,
+      "n_val_segments": 44
+    },
+    "medium": {
+      "identified": false,
+      "params": null,
+      "train_rmse": null,
+      "val_rmse": null,
+      "n_train_segments": 0,
+      "n_val_segments": 0
+    }
+  },
+  "segment_counts": {
+    "train_longitudinal": {
+      "low": 30,
+      "medium": 0,
+      "high": 0
+    },
+    "val_longitudinal": {
+      "low": 6,
+      "medium": 0,
+      "high": 0
+    },
+    "train_lateral": {
+      "low": 85,
+      "medium": 0,
+      "high": 0
+    },
+    "val_lateral": {
+      "low": 44,
+      "medium": 0,
+      "high": 0
+    }
+  }
+}

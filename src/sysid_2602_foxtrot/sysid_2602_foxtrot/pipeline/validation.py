@@ -45,10 +45,11 @@ class SessionClassifier:
 
     def classify(self, name: str) -> str:
         base = name.split('/')[-1]  # match on the leaf folder name, ignore any parent path
-        if any(r.search(base) for r in self.train_re):
-            return 'train'
+        # Validation wins: a broad train pattern must never swallow a held-out session.
         if any(r.search(base) for r in self.validate_re):
             return 'validate'
+        if any(r.search(base) for r in self.train_re):
+            return 'train'
         return 'unknown'
 
     def split(self, sessions: Dict[str, SessionData]) -> Tuple[Dict, Dict, Dict]:

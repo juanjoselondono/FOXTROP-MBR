@@ -17,6 +17,7 @@
   <depend>tf2_ros</depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>bringup_2602_foxtrot</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

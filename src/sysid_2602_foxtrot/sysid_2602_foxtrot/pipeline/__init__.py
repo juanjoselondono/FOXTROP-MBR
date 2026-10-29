@@ -18,6 +18,10 @@ from .optimization import ModelFitter, FitResult
 from .validation import SessionClassifier, CrossValidator, ValidationResult
 from .visualization import PlotGenerator
 from .pipeline import SysIDPipeline, PipelineConfig, PipelineReport
+from .visualization import RegimePlotter
+from .regimes import (ColumnMap, RegimeConfig, StepSegment, HysteresisQuantizer, RegimeClassifier,
+                      StepSegmenter, RegimeIdentifier, RegimeValidator, RegimeAnalysis, RegimeReport,
+                      sessions_to_dataframe)
 
 __all__ = [
     'MCAPSessionReader', 'TimeSynchronizer', 'BatchBagExtractor', 'RawBagData', 'SessionData',
@@ -27,4 +31,7 @@ __all__ = [
     'SessionClassifier', 'CrossValidator', 'ValidationResult',
     'PlotGenerator',
     'SysIDPipeline', 'PipelineConfig', 'PipelineReport',
+    'RegimePlotter', 'ColumnMap', 'RegimeConfig', 'StepSegment', 'HysteresisQuantizer', 'RegimeClassifier',
+    'StepSegmenter', 'RegimeIdentifier', 'RegimeValidator', 'RegimeAnalysis', 'RegimeReport',
+    'sessions_to_dataframe',
 ]

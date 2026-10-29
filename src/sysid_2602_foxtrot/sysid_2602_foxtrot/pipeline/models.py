@@ -11,8 +11,9 @@ Longitudinal:
 
 Lateral (Ackermann kinematics):
   - AckermannLateralModel:            omega = (v / L_eff) * tan(delta)
-    delta = joy_steering * max_steer_rad (a fixed, assumed calibration --
-    only L_eff is identified).
+    delta = K_steer * steering, L_eff fixed (measured); only K_steer is
+    identified. `steering` is the normalized steering command actually
+    applied to the car (cmd_vel.angular.z / 0.5), NOT the raw joystick axis.
 
 All models share the ParametricModel interface so ModelFitter (optimization.py)
 can fit any of them without special-casing: simulate(params, inputs) -> array.
@@ -52,7 +53,12 @@ class FirstOrderDeadZoneModel(ParametricModel):
 
     name = 'first_order_deadzone'
     param_names = ['K', 'tau', 'u_dead']
-    bounds = [(0.1, 5.0), (0.01, 2.0), (0.0, 0.4)]
+    # K upper bound 100, not 5: on real straight-line runs the car is still at
+    # rest at u_norm 0.10, ~1.3 m/s at 0.18 and >3.5 m/s at 0.30 -- K ~ 40 in
+    # normalized units (regimes.py) and ~2x that in raw linear.x units (the
+    # main pipeline). Tighter caps pinned the fit to the bound and forced tau
+    # to its own bound to compensate.
+    bounds = [(0.1, 100.0), (0.01, 2.0), (0.0, 0.4)]
     x0 = [1.0, 0.3, 0.05]
 
     def simulate(self, params, inputs):
@@ -88,7 +94,7 @@ class NonlinearDragModel(ParametricModel):
 
     name = 'nonlinear_drag'
     param_names = ['K_drive', 'b', 'c', 'u_dead']
-    bounds = [(0.1, 10.0), (0.01, 5.0), (0.0, 5.0), (0.0, 0.4)]
+    bounds = [(0.1, 50.0), (0.01, 5.0), (0.0, 5.0), (0.0, 0.4)]
     x0 = [1.0, 1.0, 0.1, 0.05]
 
     def __init__(self, n_substeps: int = 5):
@@ -117,21 +123,25 @@ class NonlinearDragModel(ParametricModel):
 
 
 class AckermannLateralModel(ParametricModel):
-    """omega = (v / L_eff) * tan(delta), delta = K_steer * joy_steering.
-    inputs: {'v', 'joy_steering'}.
+    """omega = (v / L_eff) * tan(delta), delta = K_steer * steering.
+    inputs: {'v', 'steering'} -- steering is the normalized command actually
+    applied (cmd_vel.angular.z / 0.5, the twist_cmd_node full-scale servo
+    range), not the raw joystick axis: in sessions driven by
+    throttle_profile_node / manual_cruise_node the raw axis reads a stale
+    +1.0 while the car is commanded straight (angular.z = 0).
 
     L_eff is a FIXED, physically measured constant (not fit) -- for this
     chassis (RC Mini Cooper R56), 0.245 m measured wheelbase. Letting the
     optimizer treat L_eff as free let it just run to its upper bound instead
     of converging, since L_eff and the steering-to-angle gain are only
-    identifiable as a ratio from omega/v/joy_steering data alone (the model
-    is omega = (K_steer/L_eff) * v * joy_steering to first order, so one of
+    identifiable as a ratio from omega/v/steering data alone (the model
+    is omega = (K_steer/L_eff) * v * steering to first order, so one of
     the two must be pinned). K_steer (the virtual max steering angle at
-    joy_steering=1) is what actually gets fit.
+    steering=1) is what actually gets fit.
 
     Bounds are SYMMETRIC (+/- max_steer_rad), not one-sided: this is the
-    sign check for whether the joystick's polarity matches the kinematic
-    convention (positive joy_steering -> positive yaw rate in the VICON
+    sign check for whether the command polarity matches the kinematic
+    convention (positive steering -> positive yaw rate in the VICON
     frame). Pinning K_steer >= 0 would silently hide a sign mismatch by
     forcing a bad fit instead of just reporting it; letting the optimizer
     choose the sign freely is the actual verification -- if it converges
@@ -148,6 +158,6 @@ class AckermannLateralModel(ParametricModel):
 
     def simulate(self, params, inputs):
         (K_steer,) = params
-        v, joy_steering = inputs['v'], inputs['joy_steering']
-        delta = K_steer * joy_steering
+        v, steering = inputs['v'], inputs['steering']
+        delta = K_steer * steering
         return (v / self.L_eff) * np.tan(delta)

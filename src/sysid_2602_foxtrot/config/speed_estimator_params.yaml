@@ -1,18 +1,66 @@
-# speed_estimator_params.yaml
-# ============================
-# Default parameters for the online speed estimator node.
-# Update K, tau, and u_dead after running scripts/fit_model.py.
+# speed_estimator_params.yaml -- see SpeedEstimatorNode.PARAMS for what each one does.
+# Floats MUST keep a decimal point (1.0, not 1): rclpy rejects an int for a float param.
 #
 # Run: ros2 launch sysid_2602_foxtrot speed_estimator.launch.py
-# Or override per-parameter:
-#   ros2 run sysid_2602_foxtrot speed_estimator_node --ros-args -p K:=1.23 -p tau:=0.28
+# Override:  ros2 launch sysid_2602_foxtrot speed_estimator.launch.py max_speed_cap:=2.5 yaw_rate_source:=gyro
 
 speed_estimator_node:
   ros__parameters:
-    # ── Model parameters (update after running fit_model.py) ────────────────
-    K:      1.0      # [m/s per unit command]  steady-state speed gain
-    tau:    0.3      # [s]                      first-order time constant
-    u_dead: 0.05     # [normalised, 0..1]       ESC dead zone threshold
+    # ── command normalization (twist_cmd_node mapping) ───────────────────────
+    u_full_scale: 0.5
+    steer_full_scale: 0.5
+    linear_x_min: -0.2353
+    linear_x_max: 0.4941
 
-    # ── Estimator update rate ────────────────────────────────────────────────
-    dt: 0.05         # [s] = 20 Hz  (must match create_timer period above)
+    # ── longitudinal model (identified on sysid2 + VICON) ────────────────────
+    K_fwd: 43.18             # [m/s per unit normalized u]   val RMSE 0.33 m/s
+    tau_fwd: 1.78
+    u_dead_fwd: 0.144        # normalized (= 0.072 raw linear.x)
+    K_rev: 4.04              # ONE reverse episode -> low confidence
+    tau_rev: 0.53
+    u_dead_rev: 0.144
+    tau_brake: 0.33
+    stop_speed: 0.05
+    decel_neutral: 0.572     # [m/s^2]
+    cornering_drag: 0.32     # fit on training figure-eights; val RMSE 0.30 m/s (0.61 gave 0.34, none 0.65)
+
+    # ── 1. impact ZUPT ───────────────────────────────────────────────────────
+    impact_decel_threshold: 1.5   # [m/s^2]
+    zupt_speed: 0.05
+
+    # ── 2. hard cap ──────────────────────────────────────────────────────────
+    max_speed_cap: 2.0       # [m/s]
+
+    # ── 3. heading complementary filter ──────────────────────────────────────
+    yaw_rate_source: ackermann   # or gyro
+    use_mag: true
+    tau_mag: 2.0
+    mag_sign: 1.0
+    mag_offset_x: 0.0
+    mag_offset_y: 0.0
+    mag_norm_tol: 0.25
+
+    # ── 4. steering curve + lateral model ────────────────────────────────────
+    steer_curve: cube        # cube | square | linear
+    L_eff: 0.245
+    K_steer_pos: 0.2495
+    K_steer_neg: 0.3244
+
+    # ── IMU speed fusion (transient gated) ───────────────────────────────────
+    use_imu: true
+    imu_accel_axis: 0
+    imu_accel_sign: 1.0
+    imu_accel_scale: 1.0
+    imu_gyro_axis: 2
+    imu_gyro_sign: 1.0
+    imu_lpf_tau: 0.1
+    imu_timeout_s: 0.3
+    bias_settle_s: 0.5
+    bias_tau: 1.0
+    w_imu_max: 0.5
+    accel_noise: 0.8
+    accel_full: 3.0
+    dudt_full: 1.0
+    tau_release: 0.3
+
+    dt: 0.05

@@ -28,7 +28,8 @@ setup(
     },
 entry_points={
         'console_scripts': [
-            'ekf_node_2602_foxtrot = ekf_2602_foxtrot.ekf_node_2602_foxtrot:main'
+            'ekf_node_2602_foxtrot = ekf_2602_foxtrot.ekf_node_2602_foxtrot:main',
+            'covariance_relay = ekf_2602_foxtrot.covariance_relay:main',
         ],
     },
 )

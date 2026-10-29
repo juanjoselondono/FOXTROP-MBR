@@ -1,0 +1,43 @@
+# robot_localization ekf_node: laser odometry + IMU -> odom -> base_link
+#
+# *_config order (15 booleans):
+#   x  y  z | roll pitch yaw | vx vy vz | vroll vpitch vyaw | ax ay az
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true               # ground car: ignore z, roll, pitch
+    publish_tf: true               # the ONLY odom -> base_link publisher (see launch file notes)
+    print_diagnostics: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # ── Laser odometry (rf2o via covariance_relay): kills long-term drift ──
+    odom0: /odom_laser
+    odom0_config: [true,  true,  false,
+                   false, false, true,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 5
+
+    # ── IMU (via covariance_relay): high-frequency transients ──────────────
+    # vyaw from the gyro, ax from the accelerometer. ay is NOT fused: on an
+    # Ackermann car lateral acceleration is centripetal (v * omega), but the
+    # EKF's motion model integrates body-frame ay straight into lateral
+    # velocity, which would invent sideways drift in every turn.
+    imu0: /imu/data_cov
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  true,  false, false]
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+    imu0_queue_size: 10

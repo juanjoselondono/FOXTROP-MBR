@@ -41,7 +41,8 @@ class PipelineConfig:
     joy_throttle_axis: int = 1
     joy_steering_axis: int = 2  # matches bringup_2602_foxtrot/config/joystick.yaml axis_angular.yaw
     position_scale: float = 0.001  # VICON mm -> m
-    max_pose_speed_mps: float = 2.0  # VICON glitch-rejection threshold
+    max_pose_speed_mps: float = 5.0  # VICON glitch-rejection threshold (real motion <= ~3 m/s)
+    pose_clock: str = 'frame'        # 'frame' = rebuild VICON capture times; 'receipt' = bag stamps
 
     # filtering.SavGolDifferentiator
     savgol_window: int = 21
@@ -72,7 +73,12 @@ class PipelineConfig:
     # mask out stationary/crawling samples and near-neutral steering before
     # computing MSE, instead of letting them dilute/drag the gain to 0.
     lateral_min_speed_mps: float = 0.5       # exclude |v_vicon| below this
-    lateral_min_steering_cmd: float = 0.15   # exclude |joy_steering| below this
+    lateral_min_steering_cmd: float = 0.15   # exclude |steering| below this
+    # Lateral input = cmd_vel.angular.z / steer_full_scale (the command the car
+    # actually received; twist_cmd_node maps +/-0.5 to full servo range).
+    # NOT the raw joystick axis: in throttle_profile/manual_cruise sessions it
+    # reads a stale +1.0 while the car is commanded straight.
+    steer_full_scale: float = 0.5
     lateral_min_samples: int = 20            # skip a session if fewer masked samples remain
 
     # validation.SessionClassifier
@@ -92,8 +98,8 @@ class PipelineReport:
     longitudinal_training_rmse: float
     longitudinal_validation_rmse: float
     longitudinal_validation_passed: bool
-    lateral_params: dict
-    lateral_training_rmse: float
+    lateral_params: Optional[dict]          # None when the lateral model couldn't be identified
+    lateral_training_rmse: Optional[float]
     lateral_validation_rmse: float
     lateral_validation_passed: bool
     per_session_longitudinal: Dict[str, float]
@@ -117,7 +123,8 @@ class SysIDPipeline:
             joy_steering_axis=self.config.joy_steering_axis,
             position_scale=self.config.position_scale,
         )
-        synchronizer = TimeSynchronizer(max_pose_speed_mps=self.config.max_pose_speed_mps)
+        synchronizer = TimeSynchronizer(max_pose_speed_mps=self.config.max_pose_speed_mps,
+                                        pose_clock=self.config.pose_clock)
         extractor = BatchBagExtractor(self.config.bag_root, reader=reader, synchronizer=synchronizer)
         return extractor.extract_all()
 
@@ -132,27 +139,32 @@ class SysIDPipeline:
     def _longitudinal_dataset(sessions: Dict[str, SessionData]) -> Dict[str, tuple]:
         return {name: ({'u': s.u, 'dt': s.dt, 'v0': s.v[0]}, s.v) for name, s in sessions.items()}
 
+    def _steering(self, s: SessionData) -> np.ndarray:
+        """Normalized steering actually applied to the car (see PipelineConfig.steer_full_scale)."""
+        return s.steer_cmd / self.config.steer_full_scale
+
     def _lateral_dataset(self, sessions: Dict[str, SessionData]) -> Dict[str, tuple]:
         """Rolling + active-cornering masked dataset for the lateral (Ackermann) fit only.
         Stationary/crawling samples (|v| < lateral_min_speed_mps) and near-neutral
-        steering (|joy_steering| < lateral_min_steering_cmd) are excluded before MSE,
+        steering (|steering| < lateral_min_steering_cmd) are excluded before MSE,
         since the Ackermann relation is only valid under continuous rolling and
         K_steer is only identifiable while the car is actively turning."""
         cfg = self.config
         out: Dict[str, tuple] = {}
         n_total = n_kept = 0
         for name, s in sessions.items():
+            steering = self._steering(s)
             mask = (np.abs(s.v) >= cfg.lateral_min_speed_mps) & \
-                   (np.abs(s.joy_steering) >= cfg.lateral_min_steering_cmd)
+                   (np.abs(steering) >= cfg.lateral_min_steering_cmd)
             n_total += len(mask)
             n_kept += int(mask.sum())
             if mask.sum() < cfg.lateral_min_samples:
                 logger.debug('Lateral mask: %s has only %d/%d qualifying sample(s), skipping',
                               name, int(mask.sum()), len(mask))
                 continue
-            out[name] = ({'v': s.v[mask], 'joy_steering': s.joy_steering[mask]}, s.omega[mask])
+            out[name] = ({'v': s.v[mask], 'steering': steering[mask]}, s.omega[mask])
         logger.info('Lateral rolling+cornering mask: kept %d/%d sample(s) across %d/%d session(s) '
-                     '(|v|>=%.2f m/s, |joy_steering|>=%.2f)',
+                     '(|v|>=%.2f m/s, |steering|>=%.2f)',
                      n_kept, n_total, len(out), len(sessions),
                      cfg.lateral_min_speed_mps, cfg.lateral_min_steering_cmd)
         return out
@@ -182,25 +194,27 @@ class SysIDPipeline:
         logger.info('Fallback improvement too small (%.4f vs %.4f) -- keeping base model', fallback.rmse, base.rmse)
         return base
 
-    def fit_lateral(self, train: Dict[str, SessionData]) -> FitResult:
+    def fit_lateral(self, train: Dict[str, SessionData]) -> Optional[FitResult]:
         masked = self._lateral_dataset(train)
         dataset = list(masked.values())
         if not dataset:
-            raise RuntimeError(
-                'Lateral mask left no training data -- lower lateral_min_speed_mps/'
-                'lateral_min_steering_cmd, this car may not reach the speed threshold often enough'
-            )
+            logger.warning(
+                'Lateral model NOT identified: no training sample is both rolling (|v|>=%.2f m/s) and '
+                'steering (|steering|>=%.2f). Training sessions need real steering commands '
+                '(throttle_profile/manual_cruise always send angular.z=0).',
+                self.config.lateral_min_speed_mps, self.config.lateral_min_steering_cmd)
+            return None
 
-        # Sign diagnostic: correlate joy_steering with omega on the SAME masked,
+        # Sign diagnostic: correlate steering with omega on the SAME masked,
         # actively-cornering data the fit uses. A negative correlation here is
         # the actual evidence of a sign mismatch, independent of what K_steer
         # converges to (reported so the two can be cross-checked against each other).
-        all_j = np.concatenate([inp['joy_steering'] for inp, _ in dataset])
+        all_j = np.concatenate([inp['steering'] for inp, _ in dataset])
         all_w = np.concatenate([tgt for _, tgt in dataset])
         if len(all_j) > 1 and np.std(all_j) > 1e-9 and np.std(all_w) > 1e-9:
             corr = float(np.corrcoef(all_j, all_w)[0, 1])
-            logger.info('Lateral sign check: corr(joy_steering, omega) = %+.3f over %d masked sample(s) '
-                         '(positive sign expected if joystick polarity matches the VICON frame)',
+            logger.info('Lateral sign check: corr(steering, omega) = %+.3f over %d masked sample(s) '
+                         '(positive sign expected if command polarity matches the VICON frame)',
                          corr, len(all_j))
         else:
             # Each masked (actively-cornering) stretch tends to be a single
@@ -208,7 +222,7 @@ class SysIDPipeline:
             # session, and here across all of them too, so Pearson
             # correlation is undefined (not computable, not just noisy).
             # The fitted K_steer's sign (logged below) is the real answer.
-            logger.info('Lateral sign check: masked joy_steering has no variance (%d sample(s), '
+            logger.info('Lateral sign check: masked steering has no variance (%d sample(s), '
                          'all near-identical steering command) -- correlation undefined, '
                          "relying on the fitted K_steer's sign instead", len(all_j))
 
@@ -257,9 +271,10 @@ class SysIDPipeline:
         lat_validator = CrossValidator(cfg.acceptance_rmse_lateral)
 
         long_val_dataset = self._longitudinal_dataset(validate) if validate else {}
-        lat_val_dataset = self._lateral_dataset(validate) if validate else {}
+        lat_val_dataset = self._lateral_dataset(validate) if (validate and lat_fit) else {}
         long_val_results = long_validator.validate_all(long_model, long_fit.raw_params, long_val_dataset)
-        lat_val_results = lat_validator.validate_all(lat_model, lat_fit.raw_params, lat_val_dataset)
+        lat_val_results = lat_validator.validate_all(lat_model, lat_fit.raw_params, lat_val_dataset) \
+            if lat_fit else {}
 
         self._plot_training_fits(train, long_model, long_fit, lat_model, lat_fit)
         self._plot_validation(validate, long_model, long_fit, long_val_results,
@@ -285,8 +300,8 @@ class SysIDPipeline:
             longitudinal_training_rmse=long_fit.rmse,
             longitudinal_validation_rmse=overall_long_rmse,
             longitudinal_validation_passed=bool(overall_long_rmse < cfg.acceptance_rmse_longitudinal) if long_val_results else False,
-            lateral_params=lat_fit.params,
-            lateral_training_rmse=lat_fit.rmse,
+            lateral_params=lat_fit.params if lat_fit else None,
+            lateral_training_rmse=lat_fit.rmse if lat_fit else None,
             lateral_validation_rmse=overall_lat_rmse,
             lateral_validation_passed=bool(overall_lat_rmse < cfg.acceptance_rmse_lateral) if lat_val_results else False,
             per_session_longitudinal={n: r.rmse for n, r in long_val_results.items()},
@@ -307,14 +322,17 @@ class SysIDPipeline:
             rmse = float(((v_sim - s.v) ** 2).mean() ** 0.5)
             self.plots.plot_longitudinal(name, s.t, s.v, v_sim, s.u, rmse,
                                           'Longitudinal training fit', f'train_long_{safe}.png')
+            if lat_fit is None:
+                continue
 
             # Full-trajectory RMSE here, for the plot label only -- the actual
             # fit objective (lat_fit.rmse) was computed on the masked
             # rolling+cornering subset (see _lateral_dataset), which is what
             # the report/log numbers mean.
-            omega_sim = lat_model.simulate(lat_fit.raw_params, {'v': s.v, 'joy_steering': s.joy_steering})
+            steering = self._steering(s)
+            omega_sim = lat_model.simulate(lat_fit.raw_params, {'v': s.v, 'steering': steering})
             rmse_o = float(((omega_sim - s.omega) ** 2).mean() ** 0.5)
-            self.plots.plot_lateral(name, s.t, s.omega, omega_sim, s.joy_steering, rmse_o,
+            self.plots.plot_lateral(name, s.t, s.omega, omega_sim, steering, rmse_o,
                                      'Lateral training fit (full trajectory shown; '
                                      'fit RMSE used the masked subset)', f'train_lat_{safe}.png')
 
@@ -332,8 +350,9 @@ class SysIDPipeline:
                 # session, so plot the full trajectory separately (consistent
                 # with _plot_training_fits) rather than against mismatched arrays.
                 r = lat_val_results[name]
-                omega_sim_full = lat_model.simulate(lat_fit.raw_params, {'v': s.v, 'joy_steering': s.joy_steering})
-                self.plots.plot_lateral(name, s.t, s.omega, omega_sim_full, s.joy_steering, r.rmse,
+                steering = self._steering(s)
+                omega_sim_full = lat_model.simulate(lat_fit.raw_params, {'v': s.v, 'steering': steering})
+                self.plots.plot_lateral(name, s.t, s.omega, omega_sim_full, steering, r.rmse,
                                          'Lateral VALIDATION (full trajectory shown; '
                                          'RMSE is the masked rolling+cornering metric)',
                                          f'val_lat_{safe}.png')

@@ -1,0 +1,13 @@
+# rf2o_laser_odometry -- range-flow laser odometry, raw scan in, nav_msgs/Odometry out.
+# Its output has all-zero covariances; covariance_relay fills them and
+# republishes /odom_rf2o -> /odom_laser for the EKF.
+rf2o_laser_odometry:
+  ros__parameters:
+    laser_scan_topic: /scan        # the RAW scan (not /scan_filtered): rf2o needs every beam
+    odom_topic: /odom_rf2o
+    publish_tf: false              # the EKF owns odom -> base_link; two publishers = broken TF
+    base_frame_id: base_link
+    odom_frame_id: odom
+    init_pose_from_topic: ""       # MUST be empty: the default (/base_pose_ground_truth)
+                                   # makes rf2o wait forever and never publish
+    freq: 10.0                     # [Hz] set to your LiDAR's scan rate

@@ -42,8 +42,11 @@ def parse_args():
     p.add_argument('--joy-steering-axis', type=int, default=2)
     p.add_argument('--position-scale', type=float, default=0.001,
                     help='Multiplier applied to raw VICON x/y (default 0.001 == assume millimeters)')
-    p.add_argument('--max-pose-speed-mps', type=float, default=2.0,
+    p.add_argument('--max-pose-speed-mps', type=float, default=5.0,
                     help='Reject VICON samples implying a speed above this (occlusion/dropout glitch rejection)')
+    p.add_argument('--pose-clock', choices=['frame', 'receipt'], default='frame',
+                    help="'frame': rebuild VICON capture times from the 100 Hz frame index (default); "
+                         "'receipt': use bag receipt stamps (bursty over the network)")
     p.add_argument('--savgol-window', type=int, default=21)
     p.add_argument('--savgol-polyorder', type=int, default=3)
     p.add_argument('--min-segment-duration', type=float, default=1.5,
@@ -83,6 +86,7 @@ def main():
         joy_steering_axis=args.joy_steering_axis,
         position_scale=args.position_scale,
         max_pose_speed_mps=args.max_pose_speed_mps,
+        pose_clock=args.pose_clock,
         savgol_window=args.savgol_window,
         savgol_polyorder=args.savgol_polyorder,
         min_segment_duration=args.min_segment_duration,
@@ -109,11 +113,14 @@ def main():
           f'(acceptance < {args.acceptance_rmse_longitudinal:.2f})  '
           f'[{"PASS" if report.longitudinal_validation_passed else "FAIL"}]')
     print(f'\nLateral model (Ackermann, L_eff fixed at {args.wheelbase_m:.3f} m)')
-    print(f'  params           : {report.lateral_params}')
-    print(f'  training RMSE    : {report.lateral_training_rmse:.4f} rad/s')
-    print(f'  validation RMSE  : {report.lateral_validation_rmse:.4f} rad/s  '
-          f'(acceptance < {args.acceptance_rmse_lateral:.2f})  '
-          f'[{"PASS" if report.lateral_validation_passed else "FAIL"}]')
+    if report.lateral_params is None:
+        print('  NOT IDENTIFIED: no rolling + steering samples in the training sessions')
+    else:
+        print(f'  params           : {report.lateral_params}')
+        print(f'  training RMSE    : {report.lateral_training_rmse:.4f} rad/s')
+        print(f'  validation RMSE  : {report.lateral_validation_rmse:.4f} rad/s  '
+              f'(acceptance < {args.acceptance_rmse_lateral:.2f})  '
+              f'[{"PASS" if report.lateral_validation_passed else "FAIL"}]')
     print(f'\nFull report + plots: {args.output_dir}')
 
 

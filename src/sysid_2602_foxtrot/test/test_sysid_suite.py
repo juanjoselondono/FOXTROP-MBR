@@ -362,11 +362,11 @@ try:
         cfg = yaml.safe_load(f)
     params = cfg['speed_estimator_node']['ros__parameters']
     record('YAML parses without error', True)
-    for key in ['K', 'tau', 'u_dead', 'dt']:
+    for key in ['K_fwd', 'tau_fwd', 'u_dead_fwd', 'dt']:
         record(f'YAML: "{key}" key present', key in params)
-    record('YAML: K > 0',               float(params['K'])      > 0)
-    record('YAML: tau > 0',             float(params['tau'])     > 0)
-    record('YAML: u_dead in [0, 0.5]',  0 <= float(params['u_dead']) <= 0.5)
+    record('YAML: K_fwd > 0',               float(params['K_fwd'])      > 0)
+    record('YAML: tau_fwd > 0',             float(params['tau_fwd'])     > 0)
+    record('YAML: u_dead_fwd in [0, 0.5]',  0 <= float(params['u_dead_fwd']) <= 0.5)
     record('YAML: dt in (0, 1]',        0 <  float(params['dt']) <= 1.0)
 except Exception as e:
     record('YAML config validation', False, str(e))

@@ -177,13 +177,24 @@ class TimeSynchronizer:
     """
 
     def __init__(self, interp_kind: str = 'zero', target_rate_hz: Optional[float] = None,
-                 max_pose_speed_mps: float = 2.0):
+                 max_pose_speed_mps: float = 5.0, pose_clock: str = 'frame',
+                 vicon_rate_hz: Optional[float] = None, max_frame_gap_s: float = 0.05):
         self.interp_kind = interp_kind
         self.target_rate_hz = target_rate_hz  # None == auto (count / duration of the pose stream)
+        # pose_clock='frame': rebuild VICON capture times from the frame index
+        # instead of trusting bag receipt stamps. Verified on real bags: VICON
+        # delivers every frame at exactly 100 Hz but over the network in bursts
+        # (43-54% of receipt intervals < 1 ms, receipt jitter up to ~0.5 s), so
+        # receipt time is not capture time -- see _capture_times().
+        if pose_clock not in ('frame', 'receipt'):
+            raise ValueError("pose_clock must be 'frame' or 'receipt'")
+        self.pose_clock = pose_clock
+        self.vicon_rate_hz = vicon_rate_hz        # None == round(count / duration)
+        self.max_frame_gap_s = max_frame_gap_s    # longer capture gaps (dropped frames) are flagged
         # VICON occlusion/dropout can teleport the reported position for a
-        # frame or two (observed on real bags: implied speeds into the
-        # hundreds of m/s against a car whose max commanded speed is
-        # ~0.25 m/s). Detection happens HERE (post-resample, uniform dt)
+        # frame or two (observed on real bags: implied speeds of hundreds of
+        # m/s). Real motion tops out ~3 m/s on the frame clock (fast figure-
+        # eights), so 5 m/s separates the two cleanly. Detection happens HERE (post-resample, uniform dt)
         # rather than on raw timestamps: the raw bridge timestamps are bursty
         # (near-duplicate timestamps ~20us apart), which makes ordinary
         # position noise divided by a near-zero raw dt look like a huge
@@ -201,6 +212,41 @@ class TimeSynchronizer:
         # the region outright is the only approach that's actually clean.
         self.max_pose_speed_mps = max_pose_speed_mps
 
+    def _capture_times(self, recv_t: np.ndarray, name: str) -> np.ndarray:
+        """Capture time of frame k = k*T + E[k], where E is the lower envelope of
+        receipt latency: E[k] = min over j >= k of (recv_t[j] - j*T).
+
+        Receipt = capture + network latency (>= 0), so the minimum over a run of
+        frames recovers capture timing aligned to minimum latency. The envelope
+        is a reverse cumulative minimum, hence non-decreasing: when frames are
+        dropped, capture time really does jump by m*T and E steps up by m*T --
+        observed on real bags as +40/+80/+140 ms steps -- so drops become real
+        gaps instead of silently compressing time like a pure index clock would.
+        """
+        n = len(recv_t)
+        if n < 3:
+            return recv_t
+        rate = self.vicon_rate_hz or float(round((n - 1) / (recv_t[-1] - recv_t[0])))
+        T = 1.0 / rate
+        k = np.arange(n)
+        lat = recv_t - k * T
+        env = np.minimum.accumulate(lat[::-1])[::-1]
+        cap = k * T + env
+        dropped = int(round((env[-1] - env[0]) / T))
+        jitter = (lat - env) * 1e3
+        logger.debug('%s: frame clock %.0f Hz, receipt jitter p50 %.0f / p95 %.0f / max %.0f ms, '
+                      '~%d dropped frame(s)', name, rate, np.median(jitter),
+                      np.percentile(jitter, 95), jitter.max(), dropped)
+        return cap
+
+    def _gap_mask(self, frame_t: np.ndarray, t: np.ndarray) -> np.ndarray:
+        """Flags resampled samples that fall inside a capture gap longer than
+        max_frame_gap_s (dropped frames): there, the position is just a linear
+        interpolation across the gap, not a measurement."""
+        idx = np.clip(np.searchsorted(frame_t, t), 1, len(frame_t) - 1)
+        gap = frame_t[idx] - frame_t[idx - 1]
+        return gap > self.max_frame_gap_s
+
     def _detect_pose_glitches(self, x: np.ndarray, y: np.ndarray, dt: float, name: str) -> np.ndarray:
         n = len(x)
         bad = np.zeros(n, dtype=bool)
@@ -215,7 +261,18 @@ class TimeSynchronizer:
                             name, n_bad, n, self.max_pose_speed_mps, float(np.max(step_speed)))
         return bad
 
+    @staticmethod
+    def _dedup(t_src: np.ndarray, v_src: np.ndarray):
+        """Keeps the LAST sample of each run of identical timestamps (input is
+        time-sorted). Real bags contain duplicate receive stamps, which scipy's
+        interp1d rejects outright ("Expect x to not have duplicates")."""
+        if len(t_src) < 2:
+            return t_src, v_src
+        keep = np.r_[np.diff(t_src) > 0, True]
+        return t_src[keep], v_src[keep]
+
     def _zoh(self, t_src: np.ndarray, v_src: np.ndarray, t_dst: np.ndarray) -> np.ndarray:
+        t_src, v_src = self._dedup(t_src, v_src)
         if len(t_src) == 0:
             return np.zeros_like(t_dst)
         if len(t_src) < 2:
@@ -223,8 +280,9 @@ class TimeSynchronizer:
         f = interp1d(t_src, v_src, kind=self.interp_kind, fill_value='extrapolate', bounds_error=False)
         return f(t_dst)
 
-    @staticmethod
-    def _linear(t_src: np.ndarray, v_src: np.ndarray, t_dst: np.ndarray) -> np.ndarray:
+    @classmethod
+    def _linear(cls, t_src: np.ndarray, v_src: np.ndarray, t_dst: np.ndarray) -> np.ndarray:
+        t_src, v_src = cls._dedup(t_src, v_src)
         if len(t_src) < 2:
             return np.full_like(t_dst, v_src[0] if len(v_src) else 0.0)
         f = interp1d(t_src, v_src, kind='linear', fill_value='extrapolate', bounds_error=False)
@@ -236,8 +294,9 @@ class TimeSynchronizer:
                             name, len(raw.pose_t), len(raw.cmd_t))
             return None
 
-        t0 = min(raw.pose_t[0], raw.cmd_t[0])
-        pose_t = raw.pose_t - t0
+        frame_t = self._capture_times(raw.pose_t, name) if self.pose_clock == 'frame' else raw.pose_t
+        t0 = min(frame_t[0], raw.cmd_t[0])
+        pose_t = frame_t - t0
         duration = float(pose_t[-1] - pose_t[0])
         n_raw = len(pose_t)
         if duration <= 0:
@@ -248,13 +307,17 @@ class TimeSynchronizer:
         rate = self.target_rate_hz or auto_rate
         dt = 1.0 / rate
         n_samples = max(4, int(duration / dt) + 1)
-        t = np.arange(n_samples) * dt
+        # Grid spans the pose stream itself (which may start after the first
+        # command), so pose is interpolated, never extrapolated.
+        t = pose_t[0] + np.arange(n_samples) * dt
 
         yaw_unwrapped = np.unwrap(raw.yaw)
         x = self._linear(pose_t, raw.x, t)
         y = self._linear(pose_t, raw.y, t)
         yaw = self._linear(pose_t, yaw_unwrapped, t)
         glitch_mask = self._detect_pose_glitches(x, y, dt, name)
+        if self.pose_clock == 'frame':
+            glitch_mask |= self._gap_mask(pose_t, t)
 
         u = self._zoh(raw.cmd_t - t0, raw.u, t)
         steer_cmd = self._zoh(raw.cmd_t - t0, raw.steer_cmd, t)
