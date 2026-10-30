@@ -1,0 +1,33 @@
+# ekf_hw.yaml -- the custom EKF (ekf_node_2602_foxtrot) on the PHYSICAL car.
+# The root key must equal the node NAME: the simulator's ekf.yaml uses `ekf_node:`
+# while the node runs as `ekf_node_2602_foxtrot`, so ROS never applied it.
+#
+# State [x, y, yaw, v, omega]. It fuses VELOCITIES only (v, omega from the laser
+# odometry, omega from the gyro): odom is smooth but drifts slowly, by design --
+# SLAM / AMCL correct it through map -> odom.
+ekf_node_2602_foxtrot:
+  ros__parameters:
+    use_sim_time: false          # no /clock on the car: with true the node clock stays at 0
+    frequency: 30.0
+    sensor_timeout: 0.2
+
+    frames:
+      map_frame: map
+      odom_frame: odom
+      base_frame: base_link
+      publish_tf: true           # the ONLY odom -> base_link publisher
+
+    topics:
+      wheel_odom: /estimated_odo   # laser odometry (rf2o via covariance_relay), used as "odometry"
+      imu: /imu/data_raw
+
+    wheel_odom_use:
+      v: true
+      yaw_rate: true
+    imu_use:
+      yaw_rate: true             # raw gyro: no bias correction; set false if odom yaw drifts
+
+    P0_diag: [0.5, 0.5, 0.5, 1.0, 0.5]
+    Q_diag: [0.05, 0.05, 0.02, 0.50, 0.50]
+    R_wheel_diag: [0.02, 0.02]   # laser odometry [v, omega] -- better than wheel odometry
+    R_imu_yaw_rate: 0.05

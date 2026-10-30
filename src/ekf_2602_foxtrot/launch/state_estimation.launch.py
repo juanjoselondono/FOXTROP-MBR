@@ -57,6 +57,10 @@ def generate_launch_description():
                                           '(ros2 topic echo /scan --field header.frame_id --once)'),
         DeclareLaunchArgument('publish_static_tf', default_value='true',
                               description='false if robot_state_publisher already publishes the sensor frames'),
+        DeclareLaunchArgument('laser_odom_topic', default_value='/odom_laser',
+                              description='where the laser odometry (with covariances) is published'),
+        DeclareLaunchArgument('start_ekf', default_value='true',
+                              description='robot_localization EKF; false when another EKF owns odom -> base_link'),
     ]
     for prefix in ('laser', 'imu'):
         for axis in ('x', 'y', 'z', 'yaw'):
@@ -77,7 +81,7 @@ def generate_launch_description():
         executable='covariance_relay',
         name='covariance_relay',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[{'use_sim_time': use_sim_time, 'odom_out': LaunchConfiguration('laser_odom_topic')}],
     )
 
     ekf = Node(
@@ -85,7 +89,8 @@ def generate_launch_description():
         executable='ekf_node',
         name='ekf_filter_node',
         output='screen',
-        parameters=[ekf_params, {'use_sim_time': use_sim_time}],
+        parameters=[ekf_params, {'use_sim_time': use_sim_time, 'odom0': LaunchConfiguration('laser_odom_topic')}],
+        condition=IfCondition(LaunchConfiguration('start_ekf')),
     )
 
     return LaunchDescription(args + [

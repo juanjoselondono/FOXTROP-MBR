@@ -22,6 +22,9 @@ class AStarPlanner(Node):
         self.declare_parameter('inflation_radius_m', 0.40)
         self.declare_parameter('downsample_factor', 2)
         self.declare_parameter('path_resolution_m', 0.05)
+        # Real car: track 0.22 m -> half width 0.11 m + 0.09 m margin
+        self.declare_parameter('lethal_radius_m', 0.20)
+        self.declare_parameter('soft_radius_m', 0.65)
 
         qos = QoSProfile(
             depth=1, 
@@ -67,8 +70,8 @@ class AStarPlanner(Node):
         obstacle_mask = processed_grid > 50
         distances = distance_transform_edt(~obstacle_mask) * msg.info.resolution
         
-        lethal_radius_m = 0.10
-        soft_radius_m = 0.65 
+        lethal_radius_m = self.get_parameter('lethal_radius_m').value
+        soft_radius_m = self.get_parameter('soft_radius_m').value
         
         costmap = np.zeros_like(processed_grid, dtype=np.float32)
         costmap[distances <= lethal_radius_m] = 100.0

@@ -7,6 +7,17 @@
   <maintainer email="david.rozo31@eia.edu.co">ddrozoa8</maintainer>
   <license>TODO: License declaration</license>
 
+  <!-- ackermann_navigation.launch.py -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>ekf_2602_foxtrot</exec_depend>
+  <exec_depend>perception_2602_foxtrot</exec_depend>
+  <exec_depend>control_2602_foxtrot</exec_depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

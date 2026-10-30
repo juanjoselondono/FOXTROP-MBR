@@ -1,0 +1,24 @@
+#SLAM MAPEO COMPUTER
+ros2 launch ekf_2602_foxtrot state_estimation.launch.py laser_frame:=laser_frame
+ros2 launch slam_toolbox online_async_launch.py   slam_params_file:=$(ros2 pkg prefix bringup_2602_foxtrot)/share/bringup_2602_foxtrot/config/mapper_params_online_async.yaml   use_sim_time:=false
+rviz2 
+
+# Guardar MAPA
+
+# 1. Asegurar la existencia del directorio de destino en el workspace local
+mkdir -p ./maps
+
+# 2. Guardar el grid de ocupación (.pgm y .yaml) inyectando el tiempo de simulación de Gazebo
+ros2 run nav2_map_server map_saver_cli -f ./maps/lab --ros-args -p use_sim_time:=true
+
+# 3. Serializar el grafo de poses de SLAM Toolbox utilizando la ruta absoluta
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/juan-londono/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/slam/maps/lab'}"
+
+# Correr carro
+
+>>>>> NAVEGACION PLAN Y TRACKER <<<<<<<
+EN LA PI- ros2 launch ybeb_2602_zulu odom_op.launch.py
+EN EL PC:
+ros2 launch ekf_2602_foxtrot state_estimation.launch.py laser_frame:=laser_frame
+ros2 launch control_2602_foxtrot pure_pursuit_ackermann.launch.py   map:=$HOME/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/slam/maps/lab.yaml   v_nominal:=0.1 cmd_out_topic:=/cmd_vel_stamped
+rviz2
