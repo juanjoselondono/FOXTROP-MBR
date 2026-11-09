@@ -20,5 +20,8 @@ ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGrap
 EN LA PI- ros2 launch ybeb_2602_zulu odom_op.launch.py
 EN EL PC:
 ros2 launch ekf_2602_foxtrot state_estimation.launch.py laser_frame:=laser_frame
-ros2 launch control_2602_foxtrot pure_pursuit_ackermann.launch.py   map:=$HOME/Documents/mobileRobotics/mrad_ws_2602_Foxtrot/slam/maps/lab.yaml   v_nominal:=0.1 cmd_out_topic:=/cmd_vel_stamped
+ros2 launch control_2602_foxtrot pure_pursuit_ackermann.launch.py   map:=/home/barcobasurero/Documentos/maps/lab.yaml   v_nominal:=0.1 cmd_out_topic:=/cmd_vel_stamped
 rviz2
+
+ros2 launch bringup_2602_zulu amcl_localization.launch.py map:=/home/barcobasurero/Documentos/maps/lab.yaml
+

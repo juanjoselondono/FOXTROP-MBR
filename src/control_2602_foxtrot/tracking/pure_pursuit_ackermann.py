@@ -14,6 +14,21 @@ Pure pursuit: the lookahead point (x_l, y_l) in base_link gives the arc curvatur
 and the converter turns it into steering with the bicycle model,
 delta = atan(L * omega / v) = atan(L * kappa), i.e. the classic PP steering law.
 
+Small additions over the plain version (each one can be switched off by parameter;
+with all three off the node behaves exactly like the plain version):
+- lookahead_interp: the target is the exact point where the path crosses the circle of
+    radius Ld, instead of the first waypoint beyond it (no jumps between waypoints).
+- curv_span_m > 0: the speed also drops with the PATH curvature between the car and the
+    lookahead point, so the car slows down before the curve, not inside it.
+- max_kappa_rate > 0: limits how fast kappa may change [1/m/s]. Off by default.
+
+Arrival at the goal:
+- The last path segment is extended virtually past the goal, so the lookahead point never
+    collapses onto the goal (that made the steering twitch in the last metre).
+- Inside slow_down_dist the speed ramps down to v_min and Ld shrinks with it (tighter tracking).
+- The run ends when the car is within goal_tolerance of the goal OR when it crosses the
+    goal line (perpendicular to the final heading). It can never drive past and circle back.
+
 Real-car limits (sysid2, same values as the converter):
 - kappa is clipped to tan(K_steer_pos) / L_eff (~1.04 1/m, R_min ~0.96 m):
     the tighter (right-hand) steering lock is the binding one.
@@ -52,11 +67,15 @@ class PurePursuitAckermann(Node):
         # speed
         self.declare_parameter('v_nominal', 0.5)
         self.declare_parameter('v_min', 0.2)
-        self.declare_parameter('slow_down_dist', 0.8)     # ramp to v_min when this close to the goal
+        self.declare_parameter('slow_down_dist', 1.2)     # ramp to v_min when this close to the goal
         # lookahead Ld = ld_min + ld_gain * v, clipped to [ld_min, ld_max]
-        self.declare_parameter('ld_min', 0.6)
-        self.declare_parameter('ld_gain', 0.6)
+        self.declare_parameter('ld_min', 0.45)
+        self.declare_parameter('ld_gain', 0.5)
         self.declare_parameter('ld_max', 1.5)
+        # smoothness options (see module docstring)
+        self.declare_parameter('lookahead_interp', True)
+        self.declare_parameter('curv_span_m', 0.5)        # 0 = off (speed from the commanded kappa only)
+        self.declare_parameter('max_kappa_rate', 0.0)     # [1/m/s], 0 = off
         # vehicle (identified, sysid2)
         self.declare_parameter('L_eff', 0.245)
         self.declare_parameter('K_steer_pos', 0.2495)
@@ -72,6 +91,10 @@ class PurePursuitAckermann(Node):
         self._v_nom, self._v_min = float(p('v_nominal')), float(p('v_min'))
         self._slow = float(p('slow_down_dist'))
         self._ld_min, self._ld_gain, self._ld_max = float(p('ld_min')), float(p('ld_gain')), float(p('ld_max'))
+        self._interp = bool(p('lookahead_interp'))
+        self._curv_span = float(p('curv_span_m'))
+        self._kappa_rate = float(p('max_kappa_rate'))
+        self._dt = 1.0 / float(p('rate_hz'))
         self._kappa_max = math.tan(min(float(p('K_steer_pos')), float(p('K_steer_neg')))) / float(p('L_eff'))
         self._goal_tol = float(p('goal_tolerance'))
         self._window_m = float(p('search_window_m'))
@@ -81,6 +104,9 @@ class PurePursuitAckermann(Node):
         self._path = []        # [(x, y)] in map
         self._s = []           # cumulative arc length
         self._idx = 0          # nearest path index (monotonic)
+        self._goal_dir = None  # unit vector of the final path heading
+        self._kpath = []       # |path curvature| at each waypoint (empty = option off)
+        self._kappa_prev = 0.0 # last commanded kappa (rate limiter)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -107,6 +133,12 @@ class PurePursuitAckermann(Node):
         for a, b in zip(pts, pts[1:]):
             s.append(s[-1] + math.dist(a, b))
         self._path, self._s, self._idx = pts, s, 0
+        k = len(pts) - 1                          # final heading (unit vector) from the last distinct points
+        while k > 0 and math.dist(pts[k - 1], pts[-1]) < 0.05:
+            k -= 1
+        d = math.dist(pts[max(k - 1, 0)], pts[-1])
+        self._goal_dir = ((pts[-1][0] - pts[k - 1][0]) / d, (pts[-1][1] - pts[k - 1][1]) / d) if k > 0 else None
+        self._kpath = self._path_curvature(pts, s) if self._curv_span > 0.0 else []
         self.get_logger().info(f'Path received: {len(pts)} points, {s[-1]:.2f} m.')
 
     def _joy_cb(self, msg: Joy):
@@ -128,6 +160,26 @@ class PurePursuitAckermann(Node):
         t, q = tf.transform.translation, tf.transform.rotation
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         return t.x, t.y, yaw
+
+    def _path_curvature(self, pts, s):
+        """|curvature| at every waypoint, from the points ~curv_span_m behind and ahead of it
+        (Menger curvature). The span keeps A* grid corners from looking infinitely sharp."""
+        n, span = len(pts), self._curv_span
+        k = [0.0] * n
+        a = b = 0
+        for i in range(n):
+            while s[i] - s[a + 1] >= span:
+                a += 1
+            b = max(b, i)
+            while b + 1 < n and s[b] - s[i] < span:
+                b += 1
+            if a == i or b == i:
+                continue                          # path ends: no estimate
+            (ax, ay), (ix, iy), (bx, by) = pts[a], pts[i], pts[b]
+            cross = abs((ix - ax) * (by - ay) - (iy - ay) * (bx - ax))
+            den = math.hypot(ix - ax, iy - ay) * math.hypot(bx - ix, by - iy) * math.hypot(bx - ax, by - ay)
+            k[i] = min(self._kappa_max, 2.0 * cross / den) if den > 1e-9 else self._kappa_max
+        return k
 
     def _finish(self, reason):
         self._path = []
@@ -152,15 +204,45 @@ class PurePursuitAckermann(Node):
 
         remaining = s[-1] - s[self._idx]
         gx, gy = path[-1]
-        if remaining < self._goal_tol + 0.2 and math.hypot(gx - x, gy - y) < self._goal_tol:
-            self._finish('>>> Goal reached <<<')
-            return
+        gdist = math.hypot(gx - x, gy - y)
+        if remaining < self._goal_tol + 0.2:
+            # along > 0: the car has crossed the goal line -> stop now, never circle back
+            along = ((x - gx) * self._goal_dir[0] + (y - gy) * self._goal_dir[1]) if self._goal_dir else -1.0
+            if gdist < self._goal_tol or along >= 0.0:
+                self._finish(f'>>> Goal reached <<< ({gdist:.2f} m from the goal)')
+                return
 
-        ld = min(self._ld_max, max(self._ld_min, self._ld_min + self._ld_gain * self._v_nom))
+        # speed cap near the goal; the lookahead follows it (shorter Ld = tighter tracking)
+        v_cap = self._v_nom
+        if remaining < self._slow:
+            # reaches v_min at goal_tolerance from the goal (where the run ends), not at the goal itself
+            frac = (remaining - self._goal_tol) / max(self._slow - self._goal_tol, 1e-3)
+            v_cap = self._v_min + (self._v_nom - self._v_min) * max(0.0, frac)
+        ld = min(self._ld_max, max(self._ld_min, self._ld_min + self._ld_gain * v_cap))
         j = self._idx
         while j + 1 < len(path) and math.hypot(path[j][0] - x, path[j][1] - y) < ld:
             j += 1
         lx, ly = path[j]
+        if self._interp and j > self._idx:
+            # path[j-1] is inside the circle of radius ld and path[j] may be outside:
+            # move the target to the exact crossing point on that segment
+            ax, ay = path[j - 1]
+            ux, uy = lx - ax, ly - ay
+            fx, fy = ax - x, ay - y
+            qa = ux * ux + uy * uy
+            qb = 2.0 * (fx * ux + fy * uy)
+            qc = fx * fx + fy * fy - ld * ld
+            if qa > 1e-12 and qc < 0.0:
+                t = (-qb + math.sqrt(qb * qb - 4.0 * qa * qc)) / (2.0 * qa)
+                if t < 1.0:                       # t >= 1: the path ends inside the circle
+                    lx, ly = ax + t * ux, ay + t * uy
+        if self._interp and self._goal_dir and j == len(path) - 1 and gdist < ld:
+            # goal inside the circle: aim at the point at distance ld on the extension of the
+            # last segment, so the car arrives aligned instead of chasing a point at its nose
+            ux, uy = self._goal_dir
+            qb = (gx - x) * ux + (gy - y) * uy
+            t = -qb + math.sqrt(qb * qb - (gdist * gdist - ld * ld))
+            lx, ly = gx + t * ux, gy + t * uy
 
         # lookahead point in base_link
         c, sn = math.cos(yaw), math.sin(yaw)
@@ -172,11 +254,15 @@ class PurePursuitAckermann(Node):
         else:
             kappa = 2.0 * yl / max(d2, 1e-6)
         kappa = max(-self._kappa_max, min(self._kappa_max, kappa))
+        if self._kappa_rate > 0.0:
+            step = self._kappa_rate * self._dt
+            kappa = self._kappa_prev + max(-step, min(step, kappa - self._kappa_prev))
+        self._kappa_prev = kappa
 
         # speed: slower in tight curves and near the goal, never below v_min
-        v = self._v_nom * (1.0 - 0.5 * abs(kappa) / self._kappa_max)
-        if remaining < self._slow:
-            v = min(v, self._v_min + (self._v_nom - self._v_min) * remaining / self._slow)
+        k_speed = max([abs(kappa)] + self._kpath[self._idx:j + 1])   # worst curvature up to the lookahead
+        v = self._v_nom * (1.0 - 0.5 * k_speed / self._kappa_max)
+        v = min(v, v_cap)
         v = max(self._v_min, v)
 
         cmd = Twist()
